@@ -20,8 +20,8 @@ A Chrome extension + CLI that lets you selectively share browser tabs with AI ag
 
 ```
 ┌─────────────────┐
-│    AI Agent      │
-│  (Claude Code)   │
+│    AI Agent     │
+│  (Claude Code)  │
 └────────┬────────┘
          │ reads SKILL.md
          ▼
