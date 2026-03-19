@@ -100,7 +100,7 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
 // Shared tab indicator (prefix on tab title)
 // ---------------------------------------------------------------------------
 
-const TITLE_ICONS = ['🟢', '🟡'];
+const TITLE_ICONS = ['⚪', '🟡'];
 const TITLE_FLASH_MS = 800;
 
 async function addTitlePrefix(tabId) {
