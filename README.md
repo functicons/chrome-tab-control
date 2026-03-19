@@ -12,9 +12,9 @@ A Chrome extension + CLI that lets you selectively share browser tabs with AI ag
 - ⌨️ **Interaction** — click elements, type text, navigate pages
 - 🔍 **Console monitoring** — capture `console.log`, errors, warnings in real time
 - 🌐 **Network monitoring** — watch requests/responses with POST bodies
-- 👁️ **Visual indicator** — shared tabs show flashing 🟢🟡 in the tab title
-- 📋 **Click-to-copy extension ID** — easy setup from the extension popup
-- 🚀 **Zero npm dependencies** — uses Node.js 22+ built-in WebSocket
+- 👁️ **Visual indicator** — shared tabs show flashing ⚪🟡 in the tab title
+- 🖱️ **Right-click to share** — share/unshare from the page context menu
+- 🚀 **Zero npm dependencies** — uses Node.js 22+ built-ins only
 
 ## 🏗️ How It Works
 
@@ -38,7 +38,7 @@ A Chrome extension + CLI that lets you selectively share browser tabs with AI ag
 
 1. 👤 **User** clicks the extension icon and shares a tab
 2. 🔗 **Extension** attaches `chrome.debugger` to that tab
-3. 🔌 **Native host** creates a Unix socket for the tab
+3. 🔌 **Tab proxy** creates a Unix socket for the tab
 4. 🤖 **AI agent** connects via the socket and sends CDP commands
 5. ✅ Results flow back through the same chain
 
@@ -77,9 +77,27 @@ make check
 
 ### Share a tab
 
-Click the 🤖 extension icon → click **Share** next to the tab you want to expose.
+Two ways to share a tab:
+1. Click the 🤖 extension icon → click **Share** next to the tab
+2. Right-click anywhere on the page → **Share tab (Tab Control)**
 
-The tab title will show a flashing 🟢🟡 indicator confirming it's shared.
+The tab title will show a flashing ⚪🟡 indicator confirming it's shared.
+
+### 🤖 Use with AI agents (Claude Code)
+
+Once the skill is installed (`make install-skill`), share a tab and ask Claude Code to work with it. Examples:
+
+```
+"Summarize the page I'm looking at"
+"Extract all the links from this page"
+"Check the console for errors"
+"Monitor network requests while I click around"
+"Take a screenshot and describe the layout"
+"Click the login button and fill in the form"
+"What API calls is this page making?"
+```
+
+Claude Code will automatically discover shared tabs and use the CLI to interact with them.
 
 ### CLI commands
 
@@ -166,7 +184,7 @@ chrome-tab-control/
 - **No `--remote-debugging-port`** — the extension uses `chrome.debugger` API, which is scoped to individual tabs
 - **Per-tab Unix sockets** — each shared tab gets its own socket at `/tmp/chrome-tab-control/tab-<tabId>.sock`
 - **Zero dependencies** — pure Node.js 22+, no npm install needed
-- **Native messaging host** acts as a reverse proxy between CLI clients and the Chrome extension
+- **Tab proxy** acts as a reverse proxy between CLI clients and the Chrome extension
 
 ## 📊 Coordinate System
 
