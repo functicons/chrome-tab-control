@@ -19,6 +19,12 @@ A Chrome extension + CLI that lets you selectively share browser tabs with AI ag
 ## 🏗️ How It Works
 
 ```
+┌─────────────────┐
+│    AI Agent      │
+│  (Claude Code)   │
+└────────┬────────┘
+         │ reads SKILL.md
+         ▼
 ┌──────────────┐     ┌───────────────────┐     ┌──────────────────┐
 │   CLI Tool   │     │    Tab Proxy      │     │ Chrome Extension │
 │              │◄───►│                   │◄───►│                  │
@@ -36,10 +42,10 @@ A Chrome extension + CLI that lets you selectively share browser tabs with AI ag
                                                 └─────────────-┘
 ```
 
-1. 👤 **User** clicks the extension icon and shares a tab
+1. 👤 **User** shares a tab (extension popup or right-click)
 2. 🔗 **Extension** attaches `chrome.debugger` to that tab
 3. 🔌 **Tab proxy** creates a Unix socket for the tab
-4. 🤖 **AI agent** connects via the socket and sends CDP commands
+4. 🤖 **AI agent** reads the skill, discovers shared tabs, and runs CLI commands
 5. ✅ Results flow back through the same chain
 
 ## 📦 Setup
