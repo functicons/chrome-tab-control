@@ -35,8 +35,8 @@ fi
 # Native messaging host
 MANIFEST=""
 case "$(uname -s)" in
-  Darwin) MANIFEST="${HOME}/Library/Application Support/Google/Chrome/NativeMessagingHosts/com.anthropic.cdp_tab_control.json" ;;
-  Linux)  MANIFEST="${HOME}/.config/google-chrome/NativeMessagingHosts/com.anthropic.cdp_tab_control.json" ;;
+  Darwin) MANIFEST="${HOME}/Library/Application Support/Google/Chrome/NativeMessagingHosts/com.functicons.chrome_tab_control.json" ;;
+  Linux)  MANIFEST="${HOME}/.config/google-chrome/NativeMessagingHosts/com.functicons.chrome_tab_control.json" ;;
 esac
 if [ -n "${MANIFEST}" ] && [ -f "${MANIFEST}" ]; then
   check_pass "Tab proxy installed"

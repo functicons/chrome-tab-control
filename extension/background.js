@@ -1,7 +1,7 @@
 // Tab Control — background service worker (Manifest V3)
 // Manages debugger attachments and bridges CDP commands via native messaging.
 
-const NATIVE_HOST = 'com.anthropic.cdp_tab_control';
+const NATIVE_HOST = 'com.functicons.chrome_tab_control';
 
 let nativePort = null;
 const sharedTabs = new Map(); // tabId -> {url, title}

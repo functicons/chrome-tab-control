@@ -10,7 +10,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
-HOST_NAME="com.anthropic.cdp_tab_control"
+HOST_NAME="com.functicons.chrome_tab_control"
 EXTENSION_ID="kcmiikdjkildoflbadepjgmdecganjen"
 SKILL_SCRIPTS="${REPO_DIR}/skills/chrome-tab-control/scripts"
 HOST_WRAPPER="${SKILL_SCRIPTS}/tab-proxy-wrapper.sh"
