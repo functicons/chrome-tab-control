@@ -2,7 +2,7 @@
 
 **Give your AI agent eyes and hands on your browser — one tab at a time.**
 
-A Chrome extension + CLI that lets you selectively share browser tabs with AI agents (like Claude Code) for real-time inspection, interaction, and debugging. No `--remote-debugging-port` needed.
+A Chrome extension + CLI + AI skill that lets you selectively share browser tabs with AI agents (like Claude Code) for real-time inspection, interaction, and debugging. Install the skill, share a tab, and let your AI agent take it from there.
 
 ## ✨ Features
 
