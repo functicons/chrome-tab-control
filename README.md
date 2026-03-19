@@ -30,10 +30,10 @@ A Chrome extension + CLI that lets you selectively share browser tabs with AI ag
                                                chrome.debugger API
                                                        │
                                                        ▼
-                                                ┌─────────────┐
+                                                ┌─────────────-┐
                                                 │   Chrome     │
                                                 │  (shared tab)│
-                                                └─────────────┘
+                                                └─────────────-┘
 ```
 
 1. 👤 **User** clicks the extension icon and shares a tab
