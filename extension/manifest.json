@@ -4,7 +4,7 @@
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAvOzKveId4K/VKU1hwAgfKH9Bu4oOIiR2hO+vJtE8Pr92DXTyyhd2QIrAQwWNGVxgfvIiQBodl9ppbvCSMBWCTztS0YsL6ptCIC0YfpjTt+R4rr26SmzsPm2jQ1CmD41XxO4ZmJlL12A0HMHCwVWSAOpN/3iDe+b2iY03lpvX5F7mO6eps4L1FMVxC0vu44HQdfBYk+cKPLXlEa8b9AIOzVAwEd1nJz0esHRhcy30koPNCeuWsvjg8mdiVx0dRh4tR8N19dNcyeG08UXhFxi99XvSM/oqc77SP2vSxKzxTmAe2yu6FJQHNk+jqpLLF+rOCqfGh6w6sXtcMpmmdXHdsQIDAQAB",
   "version": "1.0.0",
   "description": "Share browser tabs with AI agents for debugging and control",
-  "permissions": ["debugger", "tabs", "nativeMessaging", "scripting"],
+  "permissions": ["debugger", "tabs", "nativeMessaging", "scripting", "contextMenus"],
   "host_permissions": ["<all_urls>"],
   "background": {
     "service_worker": "background.js"

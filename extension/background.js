@@ -7,6 +7,39 @@ let nativePort = null;
 const sharedTabs = new Map(); // tabId -> {url, title}
 
 // ---------------------------------------------------------------------------
+// Tab context menu (right-click on tab)
+// ---------------------------------------------------------------------------
+
+const MENU_ID = 'tab-control-toggle';
+
+function updateContextMenu(tabId) {
+  const isShared = sharedTabs.has(tabId);
+  chrome.contextMenus.update(MENU_ID, {
+    title: isShared ? 'Unshare tab (Tab Control)' : 'Share tab (Tab Control)',
+  }).catch(() => {});
+}
+
+chrome.contextMenus.create({
+  id: MENU_ID,
+  title: 'Share tab (Tab Control)',
+  contexts: ['page'],
+}, () => chrome.runtime.lastError); // suppress duplicate error on reload
+
+chrome.contextMenus.onClicked.addListener((info, tab) => {
+  if (info.menuItemId !== MENU_ID || !tab?.id) return;
+  if (sharedTabs.has(tab.id)) {
+    unshareTab(tab.id);
+  } else {
+    shareTab(tab.id);
+  }
+});
+
+// Update menu text when user switches tabs
+chrome.tabs.onActivated.addListener(({ tabId }) => {
+  updateContextMenu(tabId);
+});
+
+// ---------------------------------------------------------------------------
 // Native messaging
 // ---------------------------------------------------------------------------
 
@@ -216,6 +249,10 @@ async function unshareTab(tabId) {
 
 function broadcastState() {
   chrome.runtime.sendMessage({ type: 'state_updated' }).catch(() => {});
+  // Update context menu to reflect current tab's share state
+  chrome.tabs.query({ active: true, currentWindow: true }).then(([tab]) => {
+    if (tab) updateContextMenu(tab.id);
+  }).catch(() => {});
 }
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
