@@ -192,6 +192,33 @@ chrome-tab-control/
 - **Zero dependencies** — pure Node.js 22+, no npm install needed
 - **Tab proxy** acts as a reverse proxy between CLI clients and the Chrome extension
 
+## 🤔 Why Chrome Tab Control?
+
+There are other ways to connect AI agents to Chrome. Here's how they compare:
+
+| | Chrome Tab Control | [chrome-cdp-skill](https://github.com/pasky/chrome-cdp-skill) | [Chrome DevTools MCP](https://github.com/ChromeDevTools/chrome-devtools-mcp) | [Claude in Chrome](https://code.claude.com/docs/en/chrome) |
+|---|---|---|---|---|
+| **Control existing tabs** | ✅ Shared tabs only | ✅ All tabs | ✅ All tabs | ❌ Opens new tabs |
+| **Per-tab access control** | ✅ User chooses | ❌ All tabs exposed | ❌ All tabs exposed | N/A |
+| **Needs `--remote-debugging-port`** | ❌ Not needed | ✅ Required | ✅ Required | ❌ Not needed |
+| **Visual indicator** | ✅ Flashing ⚪🟡 | ❌ None | ❌ None | ❌ None |
+| **Console/network monitoring** | ✅ Real-time streaming | ❌ No | ✅ Via MCP tools | ❌ No |
+| **Works with any AI agent** | ✅ Any CLI-capable agent | ✅ Any CLI-capable agent | ✅ Any MCP client | ❌ Claude only |
+| **npm dependencies** | None | None | Yes | N/A (extension) |
+| **Setup complexity** | Extension + one command | Enable debug port | Debug port + npm install | Extension only |
+
+### The problem with `--remote-debugging-port`
+
+Chrome DevTools MCP requires Chrome to be launched with a special flag or remote debugging enabled. This **exposes every tab** — your banking site, your email, your private messages — to any process that connects to the debug port. It's a security risk that most developers are uncomfortable with.
+
+### The problem with new-tab-only
+
+Claude in Chrome opens fresh tabs for tasks. But often you want your AI agent to work with a page you're *already looking at* — debug a form that's misbehaving, extract data from a dashboard, or monitor network requests while you interact with the page.
+
+### Chrome Tab Control: the best of both worlds
+
+Share only the tabs you want. Your agent sees what you allow, nothing more. No debug port, no new tabs — just point at a tab and say "help me with this."
+
 ## 📊 Coordinate System
 
 Screenshots are captured at native device resolution:
