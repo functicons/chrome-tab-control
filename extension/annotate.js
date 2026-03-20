@@ -17,14 +17,14 @@
 
   // --- Constants ---
   const COLORS = [
-    { id: 'red',    hex: '#e53935', fill: 'rgba(229, 57, 53, 0.08)' },
-    { id: 'blue',   hex: '#1e88e5', fill: 'rgba(30, 136, 229, 0.08)' },
-    { id: 'green',  hex: '#43a047', fill: 'rgba(67, 160, 71, 0.08)' },
-    { id: 'orange', hex: '#fb8c00', fill: 'rgba(251, 140, 0, 0.08)' },
-    { id: 'purple', hex: '#8e24aa', fill: 'rgba(142, 36, 170, 0.08)' },
-    { id: 'black',  hex: '#212121', fill: 'rgba(33, 33, 33, 0.08)' },
+    { id: 'red',    hex: '#e53935', fill: 'none' },
+    { id: 'blue',   hex: '#1e88e5', fill: 'none' },
+    { id: 'green',  hex: '#43a047', fill: 'none' },
+    { id: 'orange', hex: '#fb8c00', fill: 'none' },
+    { id: 'purple', hex: '#8e24aa', fill: 'none' },
+    { id: 'black',  hex: '#212121', fill: 'none' },
   ];
-  const STROKE_WIDTH = 2.5;
+  const STROKE_WIDTH = 4;
   const FONT_SIZE = 20;
 
   // --- State ---
@@ -65,6 +65,61 @@
     zIndex: '2147483647',
     alignItems: 'center',
     userSelect: 'none',
+  });
+
+  // --- Drag handle for moving toolbar ---
+  const dragHandle = document.createElement('div');
+  dragHandle.title = 'Drag to move';
+  dragHandle.textContent = '⠿';
+  Object.assign(dragHandle.style, {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: '20px',
+    height: '32px',
+    cursor: 'grab',
+    color: '#aaa',
+    fontSize: '16px',
+    flexShrink: '0',
+    marginRight: '2px',
+  });
+  toolbar.appendChild(dragHandle);
+
+  let tbDragging = false;
+  let tbDragOffsetX = 0, tbDragOffsetY = 0;
+  let tbPositioned = false; // tracks if we've switched from centered to absolute positioning
+
+  dragHandle.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    tbDragging = true;
+    dragHandle.style.cursor = 'grabbing';
+    // Switch from center-transform positioning to direct left/top on first drag
+    if (!tbPositioned) {
+      tbPositioned = true;
+      const rect = toolbar.getBoundingClientRect();
+      toolbar.style.transform = 'none';
+      toolbar.style.left = rect.left + 'px';
+      toolbar.style.top = rect.top + 'px';
+    }
+    const rect = toolbar.getBoundingClientRect();
+    tbDragOffsetX = e.clientX - rect.left;
+    tbDragOffsetY = e.clientY - rect.top;
+    dragHandle.setPointerCapture(e.pointerId);
+  });
+
+  dragHandle.addEventListener('pointermove', (e) => {
+    if (!tbDragging) return;
+    e.preventDefault();
+    toolbar.style.left = (e.clientX - tbDragOffsetX) + 'px';
+    toolbar.style.top = (e.clientY - tbDragOffsetY) + 'px';
+  });
+
+  dragHandle.addEventListener('pointerup', (e) => {
+    if (!tbDragging) return;
+    tbDragging = false;
+    dragHandle.style.cursor = 'grab';
+    dragHandle.releasePointerCapture(e.pointerId);
   });
 
   const DRAWING_TOOLS = ['circle', 'rect', 'arrow', 'text'];
@@ -129,38 +184,193 @@
     buttons[tool.id] = btn;
   });
 
-  // --- Color picker (after Done, separated) ---
+  // --- Color picker (single swatch + dropdown) ---
   addSeparator();
+
+  // The single swatch button shown in the toolbar
+  const colorSwatch = document.createElement('button');
+  colorSwatch.title = 'Color (1-6)';
+  Object.assign(colorSwatch.style, {
+    all: 'unset',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: '24px',
+    height: '24px',
+    borderRadius: '50%',
+    cursor: 'pointer',
+    background: COLORS[0].hex,
+    border: 'none',
+    boxShadow: '0 0 0 2px #fff, 0 0 0 3.5px rgba(0,0,0,0.2)',
+    transition: 'transform 0.12s',
+    boxSizing: 'border-box',
+  });
+  colorSwatch.addEventListener('mouseenter', () => { colorSwatch.style.transform = 'scale(1.1)'; });
+  colorSwatch.addEventListener('mouseleave', () => { colorSwatch.style.transform = 'scale(1)'; });
+  toolbar.appendChild(colorSwatch);
+
+  // Dropdown panel (hidden by default)
+  const colorDropdown = document.createElement('div');
+  Object.assign(colorDropdown.style, {
+    position: 'absolute',
+    top: '100%',
+    right: '0',
+    marginTop: '6px',
+    display: 'none',
+    gap: '4px',
+    background: '#fff',
+    borderRadius: '8px',
+    boxShadow: '0 2px 12px rgba(0,0,0,0.18)',
+    padding: '6px',
+    pointerEvents: 'auto',
+  });
+  toolbar.style.position = 'fixed'; // already set, but ensure relative positioning for dropdown
+  toolbar.appendChild(colorDropdown);
 
   const colorBtns = [];
   COLORS.forEach((color, idx) => {
     const btn = document.createElement('button');
-    btn.title = color.id;
+    btn.title = `${color.id} (${idx + 1})`;
     Object.assign(btn.style, {
       all: 'unset',
       display: 'flex',
       alignItems: 'center',
       justifyContent: 'center',
-      width: '22px',
-      height: '22px',
+      width: '26px',
+      height: '26px',
       borderRadius: '50%',
       cursor: 'pointer',
       background: color.hex,
       border: idx === 0 ? '2.5px solid #333' : '2.5px solid transparent',
       transition: 'border-color 0.12s, transform 0.12s',
-      margin: '0 1px',
       boxSizing: 'border-box',
     });
     btn.addEventListener('mouseenter', () => {
       if (activeColorIdx !== idx) btn.style.transform = 'scale(1.15)';
     });
-    btn.addEventListener('mouseleave', () => {
-      btn.style.transform = 'scale(1)';
+    btn.addEventListener('mouseleave', () => { btn.style.transform = 'scale(1)'; });
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      setActiveColor(idx);
+      colorDropdown.style.display = 'none';
     });
-    btn.addEventListener('click', () => setActiveColor(idx));
-    toolbar.appendChild(btn);
+    colorDropdown.appendChild(btn);
     colorBtns.push(btn);
   });
+
+  colorSwatch.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const isOpen = colorDropdown.style.display === 'flex';
+    colorDropdown.style.display = isOpen ? 'none' : 'flex';
+  });
+
+  // Close dropdown when clicking elsewhere
+  root.addEventListener('pointerdown', () => {
+    colorDropdown.style.display = 'none';
+  });
+
+  // --- Minimize / expand button ---
+  addSeparator();
+  const minimizeBtn = document.createElement('button');
+  minimizeBtn.title = 'Minimize (M)';
+  minimizeBtn.textContent = '▾';
+  Object.assign(minimizeBtn.style, btnStyle);
+  minimizeBtn.addEventListener('mouseenter', () => { minimizeBtn.style.background = '#f0f0f0'; });
+  minimizeBtn.addEventListener('mouseleave', () => { minimizeBtn.style.background = 'transparent'; });
+  toolbar.appendChild(minimizeBtn);
+
+  // Small floating button shown when toolbar is minimized
+  const expandBtn = document.createElement('button');
+  expandBtn.title = 'Expand toolbar (M)';
+  expandBtn.textContent = '✏';
+  Object.assign(expandBtn.style, {
+    all: 'unset',
+    position: 'fixed',
+    top: '12px',
+    left: '50%',
+    transform: 'translateX(-50%)',
+    display: 'none',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: '36px',
+    height: '36px',
+    borderRadius: '50%',
+    background: '#fff',
+    boxShadow: '0 2px 12px rgba(0,0,0,0.18)',
+    cursor: 'pointer',
+    fontSize: '18px',
+    pointerEvents: 'auto',
+    zIndex: '2147483647',
+    transition: 'background 0.12s',
+    userSelect: 'none',
+  });
+  expandBtn.addEventListener('mouseenter', () => { expandBtn.style.background = '#f0f0f0'; });
+  expandBtn.addEventListener('mouseleave', () => { expandBtn.style.background = '#fff'; });
+  root.appendChild(expandBtn);
+
+  // --- Expand button drag-to-move ---
+  let ebDragging = false;
+  let ebDragOffsetX = 0, ebDragOffsetY = 0;
+  let ebPositioned = false;
+  let ebDragMoved = false;
+
+  expandBtn.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    ebDragging = true;
+    ebDragMoved = false;
+    expandBtn.style.cursor = 'grabbing';
+    if (!ebPositioned) {
+      ebPositioned = true;
+      const rect = expandBtn.getBoundingClientRect();
+      expandBtn.style.transform = 'none';
+      expandBtn.style.left = rect.left + 'px';
+      expandBtn.style.top = rect.top + 'px';
+    }
+    const rect = expandBtn.getBoundingClientRect();
+    ebDragOffsetX = e.clientX - rect.left;
+    ebDragOffsetY = e.clientY - rect.top;
+    expandBtn.setPointerCapture(e.pointerId);
+  });
+
+  expandBtn.addEventListener('pointermove', (e) => {
+    if (!ebDragging) return;
+    e.preventDefault();
+    ebDragMoved = true;
+    expandBtn.style.left = (e.clientX - ebDragOffsetX) + 'px';
+    expandBtn.style.top = (e.clientY - ebDragOffsetY) + 'px';
+  });
+
+  expandBtn.addEventListener('pointerup', (e) => {
+    if (!ebDragging) return;
+    ebDragging = false;
+    expandBtn.style.cursor = 'pointer';
+    expandBtn.releasePointerCapture(e.pointerId);
+    // Only toggle if it was a click, not a drag
+    if (!ebDragMoved) toggleMinimize();
+  });
+
+  let minimized = false;
+  function toggleMinimize() {
+    minimized = !minimized;
+    if (minimized) {
+      // Position expand button at toolbar's current location
+      const tbRect = toolbar.getBoundingClientRect();
+      expandBtn.style.transform = 'none';
+      expandBtn.style.left = tbRect.left + 'px';
+      expandBtn.style.top = tbRect.top + 'px';
+      ebPositioned = true;
+    } else {
+      // Position toolbar at expand button's current location
+      const ebRect = expandBtn.getBoundingClientRect();
+      toolbar.style.transform = 'none';
+      toolbar.style.left = ebRect.left + 'px';
+      toolbar.style.top = ebRect.top + 'px';
+      tbPositioned = true;
+    }
+    toolbar.style.display = minimized ? 'none' : 'flex';
+    expandBtn.style.display = minimized ? 'flex' : 'none';
+  }
+  minimizeBtn.addEventListener('click', toggleMinimize);
 
   // SVG overlay
   const svgNS = 'http://www.w3.org/2000/svg';
@@ -221,6 +431,7 @@
 
   function setActiveColor(idx) {
     activeColorIdx = idx;
+    colorSwatch.style.background = COLORS[idx].hex;
     colorBtns.forEach((btn, i) => {
       btn.style.borderColor = i === idx ? '#333' : 'transparent';
     });
@@ -407,7 +618,10 @@
 
     requestAnimationFrame(() => input.focus());
 
+    let committed = false;
     function commit() {
+      if (committed) return;
+      committed = true;
       const val = input.value.trim();
       fo.remove();
       if (val) {
@@ -419,7 +633,7 @@
 
     input.addEventListener('keydown', (ev) => {
       if (ev.key === 'Enter') { ev.preventDefault(); commit(); }
-      if (ev.key === 'Escape') { ev.preventDefault(); fo.remove(); }
+      if (ev.key === 'Escape') { ev.preventDefault(); committed = true; fo.remove(); }
       ev.stopPropagation();
     });
     input.addEventListener('blur', commit);
@@ -453,6 +667,10 @@
     // Number keys 1-6 for color switching
     else if (e.key >= '1' && e.key <= '6') {
       setActiveColor(parseInt(e.key, 10) - 1);
+    }
+    // M to toggle minimize
+    else if (e.key === 'm' || e.key === 'M') {
+      toggleMinimize();
     }
   });
 
