@@ -27,7 +27,22 @@ h1 {
 .status {
   font-size: 11px;
   color: #999;
+  flex: 1;
 }
+
+.screenshot-btn {
+  flex-shrink: 0;
+  padding: 4px 8px;
+  border: 1px solid #ddd;
+  border-radius: 6px;
+  background: #fff;
+  cursor: pointer;
+  font-size: 14px;
+  transition: all 0.15s;
+  line-height: 1;
+}
+
+.screenshot-btn:hover { background: #f0f0f0; }
 
 .tab-item {
   display: flex;

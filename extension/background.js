@@ -13,6 +13,7 @@ const annotatingTabs = new Set(); // tabId
 
 const MENU_SHARE_ID = 'tab-control-toggle';
 const MENU_ANNOTATE_ID = 'tab-control-annotate';
+const MENU_SCREENSHOT_ID = 'tab-control-screenshot';
 
 function updateContextMenu(tabId) {
   const isShared = sharedTabs.has(tabId);
@@ -21,7 +22,7 @@ function updateContextMenu(tabId) {
     title: isShared ? 'Unshare Tab' : 'Share Tab',
   }).catch(() => {});
   chrome.contextMenus.update(MENU_ANNOTATE_ID, {
-    title: isAnnotating ? 'Stop Annotating' : 'Annotate Tab',
+    title: isAnnotating ? 'Stop Annotation' : 'Annotate',
   }).catch(() => {});
 }
 
@@ -33,7 +34,13 @@ chrome.contextMenus.create({
 
 chrome.contextMenus.create({
   id: MENU_ANNOTATE_ID,
-  title: 'Annotate Tab',
+  title: 'Annotate',
+  contexts: ['page'],
+}, () => chrome.runtime.lastError);
+
+chrome.contextMenus.create({
+  id: MENU_SCREENSHOT_ID,
+  title: 'Screenshot',
   contexts: ['page'],
 }, () => chrome.runtime.lastError);
 
@@ -51,6 +58,8 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
     } else {
       injectAnnotation(tab.id);
     }
+  } else if (info.menuItemId === MENU_SCREENSHOT_ID) {
+    screenshotTab(tab);
   }
 });
 
@@ -267,6 +276,62 @@ async function unshareTab(tabId) {
 }
 
 // ---------------------------------------------------------------------------
+// Screenshot
+// ---------------------------------------------------------------------------
+
+async function screenshotTab(tab) {
+  // Inject area selector — actual capture happens when user selects area
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      files: ['screenshot-select.js'],
+    });
+  } catch (e) {
+    console.warn('Screenshot selector injection failed:', e.message);
+  }
+}
+
+async function captureAndCrop(windowId, rect, tab) {
+  try {
+    const dataUrl = await chrome.tabs.captureVisibleTab(windowId, { format: 'png' });
+
+    // Crop using OffscreenCanvas in the service worker
+    const resp = await fetch(dataUrl);
+    const blob = await resp.blob();
+    const bitmap = await createImageBitmap(blob, rect.x, rect.y, rect.w, rect.h);
+    const canvas = new OffscreenCanvas(rect.w, rect.h);
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(bitmap, 0, 0);
+    bitmap.close();
+
+    const croppedBlob = await canvas.convertToBlob({ type: 'image/png' });
+
+    // Convert blob to base64 data URL (blob/object URLs don't work for downloads in service workers)
+    const buf = await croppedBlob.arrayBuffer();
+    const bytes = new Uint8Array(buf);
+    let binary = '';
+    for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+    const croppedDataUrl = 'data:image/png;base64,' + btoa(binary);
+
+    const now = new Date();
+    const timestamp = now.getFullYear().toString()
+      + String(now.getMonth() + 1).padStart(2, '0')
+      + String(now.getDate()).padStart(2, '0')
+      + String(now.getHours()).padStart(2, '0')
+      + String(now.getMinutes()).padStart(2, '0')
+      + String(now.getSeconds()).padStart(2, '0');
+    const filename = `screenshot_${timestamp}.png`;
+    await chrome.downloads.download({
+      url: croppedDataUrl,
+      filename,
+      saveAs: true,
+    });
+  } catch (e) {
+    console.warn('Screenshot capture/crop failed:', e.message);
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Annotation overlay
 // ---------------------------------------------------------------------------
 
@@ -293,14 +358,17 @@ async function removeAnnotation(tabId) {
 
 // Keyboard shortcut: toggle annotation on active tab
 chrome.commands.onCommand.addListener(async (command) => {
-  if (command !== 'toggle-annotate') return;
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (!tab) return;
 
-  if (annotatingTabs.has(tab.id)) {
-    await removeAnnotation(tab.id);
-  } else {
-    await injectAnnotation(tab.id);
+  if (command === 'toggle-annotate') {
+    if (annotatingTabs.has(tab.id)) {
+      await removeAnnotation(tab.id);
+    } else {
+      await injectAnnotation(tab.id);
+    }
+  } else if (command === 'screenshot') {
+    await screenshotTab(tab);
   }
 });
 
@@ -360,5 +428,23 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     broadcastState();
     sendResponse({ ok: true });
     return false;
+  }
+
+  if (msg.type === 'screenshot') {
+    chrome.tabs.query({ active: true, currentWindow: true }).then(([tab]) => {
+      if (tab) return screenshotTab(tab);
+    })
+      .then(() => sendResponse({ ok: true }))
+      .catch((e) => sendResponse({ ok: false, error: e.message }));
+    return true;
+  }
+
+  if (msg.type === 'screenshot_area') {
+    chrome.tabs.query({ active: true, currentWindow: true }).then(([tab]) => {
+      if (tab) return captureAndCrop(tab.windowId, msg.rect, tab);
+    })
+      .then(() => sendResponse({ ok: true }))
+      .catch((e) => sendResponse({ ok: false, error: e.message }));
+    return true;
   }
 });

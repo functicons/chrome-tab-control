@@ -102,4 +102,17 @@ extIdEl.addEventListener('click', () => {
   });
 });
 
+// Screenshot button
+const screenshotBtn = document.getElementById('screenshotBtn');
+screenshotBtn.addEventListener('click', async () => {
+  screenshotBtn.disabled = true;
+  screenshotBtn.textContent = '...';
+  await chrome.runtime.sendMessage({ type: 'screenshot' });
+  screenshotBtn.textContent = '✓';
+  setTimeout(() => {
+    screenshotBtn.disabled = false;
+    screenshotBtn.textContent = '📷';
+  }, 1000);
+});
+
 loadTabs();
