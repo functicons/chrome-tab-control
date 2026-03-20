@@ -39,6 +39,7 @@
   let movingShape = false;
   let moveStartX = 0, moveStartY = 0;
   let moveOrigAttrs = null; // original attributes before move
+  let suppressNextClick = false; // prevent click after drag-move
   let activeColorIdx = 0;
   let drawing = false;
   let startX = 0, startY = 0;
@@ -755,6 +756,7 @@
     if (movingShape) {
       movingShape = false;
       moveOrigAttrs = null;
+      suppressNextClick = true;
       svg.releasePointerCapture(e.pointerId);
       svg.style.cursor = isSelectMode() ? 'default' : 'crosshair';
       return;
@@ -779,6 +781,7 @@
 
   // Text tool: click to place input
   svg.addEventListener('click', (e) => {
+    if (suppressNextClick) { suppressNextClick = false; return; }
     if (activeTool !== 'text') return;
     e.preventDefault();
     e.stopPropagation();
