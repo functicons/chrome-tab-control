@@ -28,7 +28,11 @@
   const FONT_SIZE = 20;
 
   // --- State ---
-  let activeTool = null; // 'circle' | 'rect' | 'arrow' | 'text' | null
+  let activeTool = null; // 'select' | 'circle' | 'rect' | 'arrow' | 'text' | null
+  let selectedShape = null;
+  let movingShape = false;
+  let moveStartX = 0, moveStartY = 0;
+  let moveOrigAttrs = null; // original attributes before move
   let activeColorIdx = 0;
   let drawing = false;
   let startX = 0, startY = 0;
@@ -122,6 +126,7 @@
     dragHandle.releasePointerCapture(e.pointerId);
   });
 
+  const ALL_TOOLS = ['circle', 'rect', 'arrow', 'text'];
   const DRAWING_TOOLS = ['circle', 'rect', 'arrow', 'text'];
 
   const tools = [
@@ -411,9 +416,98 @@
   const shapes = [];
 
   // --- Helpers ---
+  // --- Selection highlight ---
+  const selectionRect = document.createElementNS(svgNS, 'rect');
+  selectionRect.setAttribute('fill', 'none');
+  selectionRect.setAttribute('stroke', '#1a73e8');
+  selectionRect.setAttribute('stroke-width', '1.5');
+  selectionRect.setAttribute('stroke-dasharray', '5,3');
+  selectionRect.setAttribute('pointer-events', 'none');
+  selectionRect.style.display = 'none';
+  svg.appendChild(selectionRect);
+
+  function selectShape(el) {
+    if (selectedShape === el) return;
+    deselectShape();
+    selectedShape = el;
+    const bbox = el.getBBox();
+    const pad = 6;
+    selectionRect.setAttribute('x', bbox.x - pad);
+    selectionRect.setAttribute('y', bbox.y - pad);
+    selectionRect.setAttribute('width', bbox.width + pad * 2);
+    selectionRect.setAttribute('height', bbox.height + pad * 2);
+    selectionRect.setAttribute('rx', '3');
+    selectionRect.style.display = '';
+  }
+
+  function deselectShape() {
+    selectedShape = null;
+    selectionRect.style.display = 'none';
+  }
+
+  function updateSelectionRect() {
+    if (!selectedShape) return;
+    const bbox = selectedShape.getBBox();
+    const pad = 6;
+    selectionRect.setAttribute('x', bbox.x - pad);
+    selectionRect.setAttribute('y', bbox.y - pad);
+    selectionRect.setAttribute('width', bbox.width + pad * 2);
+    selectionRect.setAttribute('height', bbox.height + pad * 2);
+  }
+
+  function getShapeAttrs(el) {
+    const tag = el.tagName;
+    if (tag === 'ellipse') return { cx: +el.getAttribute('cx'), cy: +el.getAttribute('cy') };
+    if (tag === 'rect') return { x: +el.getAttribute('x'), y: +el.getAttribute('y') };
+    if (tag === 'line') return {
+      x1: +el.getAttribute('x1'), y1: +el.getAttribute('y1'),
+      x2: +el.getAttribute('x2'), y2: +el.getAttribute('y2'),
+    };
+    if (tag === 'text') return { x: +el.getAttribute('x'), y: +el.getAttribute('y') };
+    // Arrow group (<g> with __tcLine)
+    if (tag === 'g' && el.__tcLine) {
+      const ln = el.__tcLine;
+      return {
+        x1: +ln.getAttribute('x1'), y1: +ln.getAttribute('y1'),
+        x2: +ln.getAttribute('x2'), y2: +ln.getAttribute('y2'),
+      };
+    }
+    return {};
+  }
+
+  function moveShapeBy(el, dx, dy) {
+    const tag = el.tagName;
+    if (tag === 'ellipse') {
+      el.setAttribute('cx', moveOrigAttrs.cx + dx);
+      el.setAttribute('cy', moveOrigAttrs.cy + dy);
+    } else if (tag === 'rect') {
+      el.setAttribute('x', moveOrigAttrs.x + dx);
+      el.setAttribute('y', moveOrigAttrs.y + dy);
+    } else if (tag === 'line') {
+      el.setAttribute('x1', moveOrigAttrs.x1 + dx);
+      el.setAttribute('y1', moveOrigAttrs.y1 + dy);
+      el.setAttribute('x2', moveOrigAttrs.x2 + dx);
+      el.setAttribute('y2', moveOrigAttrs.y2 + dy);
+    } else if (tag === 'text') {
+      el.setAttribute('x', moveOrigAttrs.x + dx);
+      el.setAttribute('y', moveOrigAttrs.y + dy);
+    } else if (tag === 'g' && el.__tcLine) {
+      // Arrow group: move both the visible line and the hit area
+      [el.__tcLine, el.__tcHitArea].forEach((ln) => {
+        ln.setAttribute('x1', moveOrigAttrs.x1 + dx);
+        ln.setAttribute('y1', moveOrigAttrs.y1 + dy);
+        ln.setAttribute('x2', moveOrigAttrs.x2 + dx);
+        ln.setAttribute('y2', moveOrigAttrs.y2 + dy);
+      });
+    }
+  }
+
+  function isSelectMode() { return !activeTool; }
+
   function setActiveTool(toolId) {
     activeTool = toolId;
-    DRAWING_TOOLS.forEach((id) => {
+    if (!isSelectMode()) deselectShape();
+    ALL_TOOLS.forEach((id) => {
       const btn = buttons[id];
       if (id === toolId) {
         btn.style.background = '#1a73e8';
@@ -425,8 +519,9 @@
         btn.style.borderColor = 'transparent';
       }
     });
-    svg.style.pointerEvents = toolId ? 'all' : 'none';
-    svg.style.cursor = toolId === 'text' ? 'text' : toolId ? 'crosshair' : 'default';
+    // SVG always receives pointer events (null = select mode)
+    svg.style.pointerEvents = 'all';
+    svg.style.cursor = isSelectMode() ? 'default' : activeTool === 'text' ? 'text' : 'crosshair';
   }
 
   function setActiveColor(idx) {
@@ -447,6 +542,7 @@
     el.setAttribute('stroke', c.hex);
     el.setAttribute('stroke-width', STROKE_WIDTH);
     el.setAttribute('fill', c.fill);
+    el.setAttribute('pointer-events', 'all');
     return el;
   }
 
@@ -461,6 +557,7 @@
     el.setAttribute('stroke-width', STROKE_WIDTH);
     el.setAttribute('fill', c.fill);
     el.setAttribute('rx', '3');
+    el.setAttribute('pointer-events', 'all');
     return el;
   }
 
@@ -474,7 +571,27 @@
     el.setAttribute('stroke', c.hex);
     el.setAttribute('stroke-width', STROKE_WIDTH);
     el.setAttribute('marker-end', `url(#__tc-arrowhead-${c.id})`);
+    el.setAttribute('pointer-events', 'stroke');
     return el;
+  }
+
+  // Wrap a line in a group with an invisible fat hit area for easier selection
+  function createArrowGroup(x1, y1, x2, y2) {
+    const g = document.createElementNS(svgNS, 'g');
+    const hitArea = document.createElementNS(svgNS, 'line');
+    hitArea.setAttribute('x1', x1);
+    hitArea.setAttribute('y1', y1);
+    hitArea.setAttribute('x2', x2);
+    hitArea.setAttribute('y2', y2);
+    hitArea.setAttribute('stroke', 'transparent');
+    hitArea.setAttribute('stroke-width', '20');
+    hitArea.setAttribute('pointer-events', 'stroke');
+    const line = createLine(x1, y1, x2, y2);
+    g.appendChild(hitArea);
+    g.appendChild(line);
+    g.__tcLine = line;
+    g.__tcHitArea = hitArea;
+    return g;
   }
 
   function createText(x, y, content) {
@@ -489,12 +606,13 @@
     el.setAttribute('stroke', '#fff');
     el.setAttribute('stroke-width', '3');
     el.setAttribute('paint-order', 'stroke');
+    el.setAttribute('pointer-events', 'all');
     el.textContent = content;
     return el;
   }
 
   // --- Tool button handlers ---
-  DRAWING_TOOLS.forEach((id) => {
+  ALL_TOOLS.forEach((id) => {
     buttons[id].addEventListener('click', () => setActiveTool(activeTool === id ? null : id));
   });
 
@@ -513,14 +631,45 @@
     chrome.runtime.sendMessage({ type: 'annotate_done' }).catch(() => {});
   });
 
-  // --- SVG drawing handlers ---
+  // --- SVG drawing & select handlers ---
   svg.addEventListener('pointerdown', (e) => {
-    if (!activeTool || activeTool === 'text') return;
+    const svgRect = svg.getBoundingClientRect();
+    const px = e.clientX - svgRect.left;
+    const py = e.clientY - svgRect.top;
+
+    // --- Check if user clicked on an existing shape (works in any mode) ---
+    let clickTarget = e.target;
+    let foundShape = null;
+    while (clickTarget && clickTarget !== svg) {
+      if (shapes.includes(clickTarget)) { foundShape = clickTarget; break; }
+      clickTarget = clickTarget.parentElement;
+    }
+
+    // If a shape was clicked, select and start moving it
+    if (foundShape) {
+      e.preventDefault();
+      selectShape(foundShape);
+      movingShape = true;
+      moveStartX = px;
+      moveStartY = py;
+      moveOrigAttrs = getShapeAttrs(foundShape);
+      svg.setPointerCapture(e.pointerId);
+      svg.style.cursor = 'move';
+      return;
+    }
+
+    // Clicked on empty space
+    deselectShape();
+
+    // In select mode, nothing more to do
+    if (isSelectMode()) return;
+
+    // --- Drawing tools ---
+    if (activeTool === 'text') return;
     e.preventDefault();
     drawing = true;
-    const rect = svg.getBoundingClientRect();
-    startX = e.clientX - rect.left;
-    startY = e.clientY - rect.top;
+    startX = px;
+    startY = py;
 
     if (activeTool === 'circle') {
       previewEl = createEllipse(startX, startY, 0, 0);
@@ -529,17 +678,29 @@
       previewEl = createRect(startX, startY, 0, 0);
       svg.appendChild(previewEl);
     } else if (activeTool === 'arrow') {
-      previewEl = createLine(startX, startY, startX, startY);
+      previewEl = createArrowGroup(startX, startY, startX, startY);
       svg.appendChild(previewEl);
     }
   });
 
   svg.addEventListener('pointermove', (e) => {
+    const svgRect = svg.getBoundingClientRect();
+    const curX = e.clientX - svgRect.left;
+    const curY = e.clientY - svgRect.top;
+
+    // --- Moving a selected shape ---
+    if (movingShape && selectedShape) {
+      e.preventDefault();
+      const dx = curX - moveStartX;
+      const dy = curY - moveStartY;
+      moveShapeBy(selectedShape, dx, dy);
+      updateSelectionRect();
+      return;
+    }
+
+    // --- Drawing preview ---
     if (!drawing || !previewEl) return;
     e.preventDefault();
-    const rect = svg.getBoundingClientRect();
-    const curX = e.clientX - rect.left;
-    const curY = e.clientY - rect.top;
 
     if (activeTool === 'circle') {
       const cx = (startX + curX) / 2;
@@ -559,20 +720,32 @@
       previewEl.setAttribute('y', y);
       previewEl.setAttribute('width', w);
       previewEl.setAttribute('height', h);
-    } else if (activeTool === 'arrow') {
-      previewEl.setAttribute('x2', curX);
-      previewEl.setAttribute('y2', curY);
+    } else if (activeTool === 'arrow' && previewEl.__tcLine) {
+      previewEl.__tcLine.setAttribute('x2', curX);
+      previewEl.__tcLine.setAttribute('y2', curY);
+      previewEl.__tcHitArea.setAttribute('x2', curX);
+      previewEl.__tcHitArea.setAttribute('y2', curY);
     }
   });
 
   svg.addEventListener('pointerup', (e) => {
+    // --- End shape move ---
+    if (movingShape) {
+      movingShape = false;
+      moveOrigAttrs = null;
+      svg.releasePointerCapture(e.pointerId);
+      svg.style.cursor = isSelectMode() ? 'default' : 'crosshair';
+      return;
+    }
+
+    // --- End drawing ---
     if (!drawing || !previewEl) return;
     e.preventDefault();
     drawing = false;
 
-    const rect = svg.getBoundingClientRect();
-    const curX = e.clientX - rect.left;
-    const curY = e.clientY - rect.top;
+    const svgRect = svg.getBoundingClientRect();
+    const curX = e.clientX - svgRect.left;
+    const curY = e.clientY - svgRect.top;
     const dist = Math.hypot(curX - startX, curY - startY);
     if (dist < 5) {
       previewEl.remove();
@@ -651,13 +824,22 @@
     else if (e.key === 'r' || e.key === 'R') setActiveTool(activeTool === 'rect' ? null : 'rect');
     else if (e.key === 'a' || e.key === 'A') setActiveTool(activeTool === 'arrow' ? null : 'arrow');
     else if (e.key === 't' || e.key === 'T') setActiveTool(activeTool === 'text' ? null : 'text');
+    else if ((e.key === 'Delete' || e.key === 'Backspace') && selectedShape) {
+      e.preventDefault();
+      const idx = shapes.indexOf(selectedShape);
+      if (idx !== -1) shapes.splice(idx, 1);
+      selectedShape.remove();
+      deselectShape();
+    }
     else if ((e.key === 'z' || e.key === 'Z') && (e.metaKey || e.ctrlKey)) {
       e.preventDefault();
       const last = shapes.pop();
       if (last) last.remove();
     }
     else if (e.key === 'Escape') {
-      if (activeTool) {
+      if (selectedShape) {
+        deselectShape();
+      } else if (activeTool) {
         setActiveTool(null);
       } else {
         root.remove();
