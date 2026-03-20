@@ -27,10 +27,10 @@ function render(tabs) {
           <span class="tab-url">${escapeHtml(t.url)}</span>
         </div>
       </div>
-      ${t.shared ? `<button class="annotate-btn ${t.annotating ? 'active' : ''}"
+      <button class="annotate-btn ${t.annotating ? 'active' : ''}"
               data-tab-id="${t.tabId}">
         ${t.annotating ? 'Stop' : 'Annotate'}
-      </button>` : ''}
+      </button>
       <button class="share-btn ${t.shared ? 'shared' : ''}"
               data-tab-id="${t.tabId}">
         ${t.shared ? 'Unshare' : 'Share'}

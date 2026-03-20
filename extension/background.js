@@ -22,7 +22,6 @@ function updateContextMenu(tabId) {
   }).catch(() => {});
   chrome.contextMenus.update(MENU_ANNOTATE_ID, {
     title: isAnnotating ? 'Stop Annotating' : 'Annotate Tab',
-    visible: isShared,
   }).catch(() => {});
 }
 
@@ -36,7 +35,6 @@ chrome.contextMenus.create({
   id: MENU_ANNOTATE_ID,
   title: 'Annotate Tab',
   contexts: ['page'],
-  visible: false,
 }, () => chrome.runtime.lastError);
 
 chrome.contextMenus.onClicked.addListener((info, tab) => {
@@ -273,7 +271,6 @@ async function unshareTab(tabId) {
 // ---------------------------------------------------------------------------
 
 async function injectAnnotation(tabId) {
-  if (!sharedTabs.has(tabId)) return;
   try {
     await chrome.scripting.executeScript({
       target: { tabId },
@@ -294,11 +291,11 @@ async function removeAnnotation(tabId) {
   broadcastState();
 }
 
-// Keyboard shortcut: toggle annotation on active shared tab
+// Keyboard shortcut: toggle annotation on active tab
 chrome.commands.onCommand.addListener(async (command) => {
   if (command !== 'toggle-annotate') return;
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  if (!tab || !sharedTabs.has(tab.id)) return;
+  if (!tab) return;
 
   if (annotatingTabs.has(tab.id)) {
     await removeAnnotation(tab.id);
