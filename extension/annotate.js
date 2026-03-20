@@ -7,9 +7,15 @@
 
   const ROOT_ID = '__tc-annotate-root';
 
-  // If already active, remove it (toggle behavior)
+  // If overlay exists, check if it's dormant (Done was clicked) or active
   const existing = document.getElementById(ROOT_ID);
   if (existing) {
+    if (existing.__tcReactivate) {
+      // Dormant — reactivate
+      existing.__tcReactivate();
+      return;
+    }
+    // Active — remove entirely (toggle off)
     existing.remove();
     chrome.runtime.sendMessage({ type: 'annotate_done' }).catch(() => {});
     return;
@@ -626,10 +632,26 @@
     shapes.length = 0;
   });
 
-  buttons.done.addEventListener('click', () => {
-    root.remove();
+  function deactivateOverlay() {
+    deselectShape();
+    setActiveTool(null);
+    toolbar.style.display = 'none';
+    expandBtn.style.display = 'none';
+    svg.style.pointerEvents = 'none';
+    root.__tcReactivate = reactivateOverlay;
     chrome.runtime.sendMessage({ type: 'annotate_done' }).catch(() => {});
-  });
+  }
+
+  function reactivateOverlay() {
+    minimized = false;
+    toolbar.style.display = 'flex';
+    expandBtn.style.display = 'none';
+    svg.style.pointerEvents = 'all';
+    delete root.__tcReactivate;
+    setActiveTool('circle');
+  }
+
+  buttons.done.addEventListener('click', deactivateOverlay);
 
   // --- SVG drawing & select handlers ---
   svg.addEventListener('pointerdown', (e) => {
@@ -842,8 +864,7 @@
       } else if (activeTool) {
         setActiveTool(null);
       } else {
-        root.remove();
-        chrome.runtime.sendMessage({ type: 'annotate_done' }).catch(() => {});
+        deactivateOverlay();
       }
     }
     // Number keys 1-6 for color switching
