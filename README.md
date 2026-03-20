@@ -14,6 +14,7 @@ A Chrome extension + CLI + AI skill that lets you selectively share browser tabs
 - 🌐 **Network monitoring** — watch requests/responses with POST bodies
 - 👁️ **Visual indicator** — shared tabs show flashing ⚪🟡 in the tab title
 - 🖱️ **Right-click to share** — share/unshare from the page context menu
+- ✏️ **Annotation overlay** — draw circles, rectangles, arrows, and text on shared tabs to communicate with the agent
 - 🚀 **Zero npm dependencies** — uses Node.js 22+ built-ins only
 
 ## 🤔 Why Chrome Tab Control?
@@ -109,11 +110,38 @@ make check
 
 ### Share a tab
 
-Two ways to share a tab:
+Three ways to share a tab:
 1. Click the 🤖 extension icon → click **Share** next to the tab
-2. Right-click anywhere on the page → **Share tab (Tab Control)**
+2. Right-click anywhere on the page → **Share Tab**
+3. Use the keyboard shortcut to toggle annotation (which requires sharing first)
 
 The tab title will show a flashing ⚪🟡 indicator confirming it's shared.
+
+### Annotate a tab
+
+Draw on a shared tab to visually communicate with the AI agent. Annotations appear in CDP screenshots, so the agent sees exactly what you marked up.
+
+**Activate annotation mode** (3 ways):
+1. Click the 🤖 extension icon → click **Annotate** next to a shared tab
+2. Right-click on a shared tab → **Annotate Tab**
+3. Press `Cmd+Shift+A` (Mac) / `Ctrl+Shift+A` (Windows/Linux)
+
+**Drawing tools** (floating toolbar or keyboard shortcuts):
+| Tool | Toolbar | Key | How to draw |
+|---|---|---|---|
+| Circle | ○ | `C` | Click and drag to define bounding box |
+| Rectangle | □ | `R` | Click and drag to define bounding box |
+| Arrow | → | `A` | Click and drag from start to end |
+| Text | T | `T` | Click to place, type text, Enter to confirm |
+
+**Colors:** 6 colors available in the toolbar (red, blue, green, orange, purple, black). Switch via click or number keys `1`–`6`.
+
+**Other controls:**
+| Action | Toolbar | Key |
+|---|---|---|
+| Undo | ↩ | `Cmd+Z` / `Ctrl+Z` |
+| Clear all | ✕ | — |
+| Exit annotation | ✓ | `Esc` (press twice: first deselects tool, second exits) |
 
 ### 🤖 Use with AI agents (Claude Code)
 
@@ -191,6 +219,7 @@ chrome-tab-control/
 │   ├── manifest.json
 │   ├── background.js
 │   ├── popup.html / popup.css / popup.js
+│   ├── annotate.js                        # Annotation overlay (injected on demand)
 │   └── icons/
 ├── scripts/                            # Setup & dev tools
 │   ├── install-tab-proxy.sh            # Tab proxy setup

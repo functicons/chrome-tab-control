@@ -103,6 +103,30 @@ h1 {
   cursor: default;
 }
 
+.annotate-btn {
+  flex-shrink: 0;
+  padding: 5px 10px;
+  border: 1px solid #ddd;
+  border-radius: 6px;
+  background: #fff;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 500;
+  transition: all 0.15s;
+}
+
+.annotate-btn:hover { background: #fff3f0; border-color: #e53935; color: #e53935; }
+
+.annotate-btn.active {
+  background: #e53935;
+  border-color: #e53935;
+  color: #fff;
+}
+
+.annotate-btn.active:hover { background: #c62828; }
+
+.annotate-btn:disabled { opacity: 0.5; cursor: default; }
+
 .empty {
   color: #999;
   text-align: center;

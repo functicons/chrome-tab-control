@@ -21,5 +21,14 @@
       "16": "icons/icon16.png",
       "48": "icons/icon48.png"
     }
+  },
+  "commands": {
+    "toggle-annotate": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+A",
+        "mac": "Command+Shift+A"
+      },
+      "description": "Toggle annotation mode on shared tab"
+    }
   }
 }

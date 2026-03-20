@@ -5,32 +5,54 @@ const NATIVE_HOST = 'com.functicons.chrome_tab_control';
 
 let nativePort = null;
 const sharedTabs = new Map(); // tabId -> {url, title}
+const annotatingTabs = new Set(); // tabId
 
 // ---------------------------------------------------------------------------
 // Tab context menu (right-click on tab)
 // ---------------------------------------------------------------------------
 
-const MENU_ID = 'tab-control-toggle';
+const MENU_SHARE_ID = 'tab-control-toggle';
+const MENU_ANNOTATE_ID = 'tab-control-annotate';
 
 function updateContextMenu(tabId) {
   const isShared = sharedTabs.has(tabId);
-  chrome.contextMenus.update(MENU_ID, {
-    title: isShared ? 'Unshare tab (Tab Control)' : 'Share tab (Tab Control)',
+  const isAnnotating = annotatingTabs.has(tabId);
+  chrome.contextMenus.update(MENU_SHARE_ID, {
+    title: isShared ? 'Unshare Tab' : 'Share Tab',
+  }).catch(() => {});
+  chrome.contextMenus.update(MENU_ANNOTATE_ID, {
+    title: isAnnotating ? 'Stop Annotating' : 'Annotate Tab',
+    visible: isShared,
   }).catch(() => {});
 }
 
 chrome.contextMenus.create({
-  id: MENU_ID,
-  title: 'Share tab (Tab Control)',
+  id: MENU_SHARE_ID,
+  title: 'Share Tab',
   contexts: ['page'],
-}, () => chrome.runtime.lastError); // suppress duplicate error on reload
+}, () => chrome.runtime.lastError);
+
+chrome.contextMenus.create({
+  id: MENU_ANNOTATE_ID,
+  title: 'Annotate Tab',
+  contexts: ['page'],
+  visible: false,
+}, () => chrome.runtime.lastError);
 
 chrome.contextMenus.onClicked.addListener((info, tab) => {
-  if (info.menuItemId !== MENU_ID || !tab?.id) return;
-  if (sharedTabs.has(tab.id)) {
-    unshareTab(tab.id);
-  } else {
-    shareTab(tab.id);
+  if (!tab?.id) return;
+  if (info.menuItemId === MENU_SHARE_ID) {
+    if (sharedTabs.has(tab.id)) {
+      unshareTab(tab.id);
+    } else {
+      shareTab(tab.id);
+    }
+  } else if (info.menuItemId === MENU_ANNOTATE_ID) {
+    if (annotatingTabs.has(tab.id)) {
+      removeAnnotation(tab.id);
+    } else {
+      injectAnnotation(tab.id);
+    }
   }
 });
 
@@ -99,6 +121,7 @@ chrome.debugger.onDetach.addListener((source, reason) => {
   if (!sharedTabs.has(tabId)) return;
   removeTitlePrefix(tabId);
   sharedTabs.delete(tabId);
+  annotatingTabs.delete(tabId);
   if (nativePort) {
     nativePort.postMessage({ type: 'tab_unshared', tabId, reason });
   }
@@ -109,6 +132,7 @@ chrome.debugger.onDetach.addListener((source, reason) => {
 chrome.tabs.onRemoved.addListener((tabId) => {
   if (!sharedTabs.has(tabId)) return;
   sharedTabs.delete(tabId);
+  annotatingTabs.delete(tabId);
   if (nativePort) {
     nativePort.postMessage({ type: 'tab_unshared', tabId, reason: 'tab_closed' });
   }
@@ -231,6 +255,7 @@ async function shareTab(tabId) {
 
 async function unshareTab(tabId) {
   await removeTitlePrefix(tabId);
+  annotatingTabs.delete(tabId);
   try {
     await chrome.debugger.detach({ tabId });
   } catch {
@@ -242,6 +267,45 @@ async function unshareTab(tabId) {
   }
   broadcastState();
 }
+
+// ---------------------------------------------------------------------------
+// Annotation overlay
+// ---------------------------------------------------------------------------
+
+async function injectAnnotation(tabId) {
+  if (!sharedTabs.has(tabId)) return;
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      files: ['annotate.js'],
+    });
+    annotatingTabs.add(tabId);
+    broadcastState();
+  } catch (e) {
+    console.warn('Failed to inject annotation:', e.message);
+  }
+}
+
+async function removeAnnotation(tabId) {
+  annotatingTabs.delete(tabId);
+  try {
+    await chrome.tabs.sendMessage(tabId, { type: 'annotate_toggle_off' });
+  } catch {}
+  broadcastState();
+}
+
+// Keyboard shortcut: toggle annotation on active shared tab
+chrome.commands.onCommand.addListener(async (command) => {
+  if (command !== 'toggle-annotate') return;
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (!tab || !sharedTabs.has(tab.id)) return;
+
+  if (annotatingTabs.has(tab.id)) {
+    await removeAnnotation(tab.id);
+  } else {
+    await injectAnnotation(tab.id);
+  }
+});
 
 // ---------------------------------------------------------------------------
 // Popup communication
@@ -265,6 +329,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           url: t.url,
           title: t.title,
           shared: sharedTabs.has(t.id),
+          annotating: annotatingTabs.has(t.id),
         }));
       sendResponse({ tabs: tabList });
     });
@@ -283,5 +348,20 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       .then(() => sendResponse({ ok: true }))
       .catch((e) => sendResponse({ ok: false, error: e.message }));
     return true;
+  }
+
+  if (msg.type === 'annotate') {
+    injectAnnotation(msg.tabId)
+      .then(() => sendResponse({ ok: true }))
+      .catch((e) => sendResponse({ ok: false, error: e.message }));
+    return true;
+  }
+
+  if (msg.type === 'annotate_done') {
+    const tabId = msg.tabId || _sender?.tab?.id;
+    if (tabId) annotatingTabs.delete(tabId);
+    broadcastState();
+    sendResponse({ ok: true });
+    return false;
   }
 });
