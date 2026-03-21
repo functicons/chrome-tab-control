@@ -658,7 +658,7 @@
     expandBtn.style.display = 'none';
     svg.style.pointerEvents = 'all';
     delete root.__tcReactivate;
-    setActiveTool('circle');
+    setActiveTool('rect');
   }
 
   buttons.done.addEventListener('click', deactivateOverlay);
@@ -898,5 +898,5 @@
   });
 
   // Start with circle tool active
-  setActiveTool('circle');
+  setActiveTool('rect');
 })();
