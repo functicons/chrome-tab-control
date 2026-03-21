@@ -193,6 +193,69 @@ async function snapshotStr(cdp) {
   return lines.join('\n');
 }
 
+async function annotationsStr(cdp) {
+  await cdp.send('Runtime.enable');
+  const { result } = await cdp.send('Runtime.evaluate', {
+    expression: `(() => {
+      const els = document.querySelectorAll('[data-tc-annotation]');
+      if (!els.length) return 'No annotations found.';
+      const out = [];
+      els.forEach((el, i) => {
+        const type = el.getAttribute('data-tc-annotation');
+        const color = el.getAttribute('data-tc-color') || '';
+        const tag = el.tagName;
+        let desc = '';
+        if (tag === 'ellipse') {
+          desc = 'center=(' + Math.round(+el.getAttribute('cx')) + ',' + Math.round(+el.getAttribute('cy'))
+            + ') rx=' + Math.round(+el.getAttribute('rx')) + ' ry=' + Math.round(+el.getAttribute('ry'));
+        } else if (tag === 'rect') {
+          desc = 'at=(' + Math.round(+el.getAttribute('x')) + ',' + Math.round(+el.getAttribute('y'))
+            + ') size=' + Math.round(+el.getAttribute('width')) + 'x' + Math.round(+el.getAttribute('height'));
+        } else if (tag === 'g') {
+          const ln = el.querySelector('line[marker-end]') || el.querySelector('line');
+          if (ln) desc = 'from=(' + Math.round(+ln.getAttribute('x1')) + ',' + Math.round(+ln.getAttribute('y1'))
+            + ') to=(' + Math.round(+ln.getAttribute('x2')) + ',' + Math.round(+ln.getAttribute('y2')) + ')';
+        } else if (tag === 'text') {
+          desc = 'at=(' + Math.round(+el.getAttribute('x')) + ',' + Math.round(+el.getAttribute('y'))
+            + ') text="' + el.textContent + '"';
+        }
+        // Find page elements under the annotation
+        let under = '';
+        const root = document.getElementById('__tc-annotate-root');
+        if (root && (tag === 'ellipse' || tag === 'rect' || tag === 'text' || tag === 'g')) {
+          let cx, cy;
+          if (tag === 'g') {
+            const ln = el.querySelector('line[marker-end]') || el.querySelector('line');
+            if (ln) { cx = +ln.getAttribute('x2'); cy = +ln.getAttribute('y2'); }
+          } else {
+            const bbox = el.getBBox();
+            cx = bbox.x + bbox.width / 2;
+            cy = bbox.y + bbox.height / 2;
+          }
+          if (cx !== undefined) {
+            // Hide entire overlay so elementFromPoint hits the page
+            const prev = root.style.display;
+            root.style.display = 'none';
+            const pageEl = document.elementFromPoint(cx, cy);
+            root.style.display = prev;
+            if (pageEl) {
+              const sel = pageEl.tagName.toLowerCase()
+                + (pageEl.id ? '#' + pageEl.id : '')
+                + (pageEl.className && typeof pageEl.className === 'string' ? '.' + pageEl.className.trim().split(/\\s+/).join('.') : '');
+              const label = pageEl.getAttribute('aria-label') || pageEl.textContent?.slice(0, 50).trim() || '';
+              under = ' -> ' + sel + (label ? ' "' + label + '"' : '');
+            }
+          }
+        }
+        out.push('[' + type + '] ' + color + ' ' + desc + under);
+      });
+      return out.join('\\n');
+    })()`,
+    returnByValue: true,
+  });
+  return result.value;
+}
+
 async function evalStr(cdp, expression) {
   await cdp.send('Runtime.enable');
   const result = await cdp.send('Runtime.evaluate', {
@@ -641,6 +704,7 @@ Usage: tab-control <command> [args]
   type    <tab> <text>              Type text at current focus
   loadall <tab> <selector> [ms]     Click until element disappears
   evalraw <tab> <method> [json]     Raw CDP command
+  annotations <tab>                 List user-drawn annotations with page context
 
 <tab> is a tab ID from "tab-control list" (or a unique prefix).
 
@@ -658,7 +722,7 @@ COORDINATES
 const NEEDS_TAB = new Set([
   'snap', 'snapshot', 'eval', 'shot', 'screenshot', 'html', 'nav', 'navigate',
   'net', 'network', 'console', 'requests', 'watch',
-  'click', 'clickxy', 'type', 'loadall', 'evalraw',
+  'click', 'clickxy', 'type', 'loadall', 'evalraw', 'annotations',
 ]);
 
 async function main() {
@@ -720,6 +784,7 @@ async function main() {
     let result;
     switch (cmd) {
       case 'snap': case 'snapshot': result = await snapshotStr(cdp); break;
+      case 'annotations': result = await annotationsStr(cdp); break;
       case 'eval': {
         const expr = cmdArgs.join(' ');
         if (!expr) { console.error('Error: expression required'); process.exit(1); }

@@ -550,6 +550,8 @@
     el.setAttribute('stroke-width', STROKE_WIDTH);
     el.setAttribute('fill', c.fill);
     el.setAttribute('pointer-events', 'all');
+    el.setAttribute('data-tc-annotation', 'circle');
+    el.setAttribute('data-tc-color', c.id);
     return el;
   }
 
@@ -565,6 +567,8 @@
     el.setAttribute('fill', c.fill);
     el.setAttribute('rx', '3');
     el.setAttribute('pointer-events', 'all');
+    el.setAttribute('data-tc-annotation', 'rect');
+    el.setAttribute('data-tc-color', c.id);
     return el;
   }
 
@@ -584,7 +588,10 @@
 
   // Wrap a line in a group with an invisible fat hit area for easier selection
   function createArrowGroup(x1, y1, x2, y2) {
+    const c = getColor();
     const g = document.createElementNS(svgNS, 'g');
+    g.setAttribute('data-tc-annotation', 'arrow');
+    g.setAttribute('data-tc-color', c.id);
     const hitArea = document.createElementNS(svgNS, 'line');
     hitArea.setAttribute('x1', x1);
     hitArea.setAttribute('y1', y1);
@@ -608,6 +615,8 @@
     el.setAttribute('y', y);
     el.setAttribute('fill', c.hex);
     el.setAttribute('font-size', FONT_SIZE);
+    el.setAttribute('data-tc-annotation', 'text');
+    el.setAttribute('data-tc-color', c.id);
     el.setAttribute('font-weight', 'bold');
     el.setAttribute('font-family', "-apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif");
     el.setAttribute('stroke', '#fff');

@@ -42,6 +42,23 @@ scripts/tab-control-cli.mjs shot <tab> [file]    # default: /tmp/screenshot.png
 scripts/tab-control-cli.mjs snap <tab>
 ```
 
+### Get user annotations
+
+The user can draw annotations (circles, rectangles, arrows, text) on shared tabs to visually communicate with the agent. Use this command to get structured data about all annotations, including the page elements they point to.
+
+```bash
+scripts/tab-control-cli.mjs annotations <tab>
+```
+
+Output example:
+```
+[circle] red center=(150,200) rx=80 ry=60 -> button#submit "Submit Form"
+[arrow] red from=(50,300) to=(150,200)
+[text] red at=(160,180) text="fix this button"
+```
+
+When the user says "look at what I circled" or "check my annotations", use `annotations` to understand what they marked, then use `shot` to see the visual context.
+
 ### Evaluate JavaScript
 
 ```bash
@@ -51,6 +68,7 @@ scripts/tab-control-cli.mjs eval <tab> <expr>
 ### Other commands
 
 ```bash
+scripts/tab-control-cli.mjs annotations <tab>             # list user annotations with page context
 scripts/tab-control-cli.mjs html    <tab> [selector]    # full page or element HTML
 scripts/tab-control-cli.mjs nav     <tab> <url>          # navigate and wait for load
 scripts/tab-control-cli.mjs net     <tab>                # resource timing entries
@@ -79,3 +97,5 @@ CSS px = screenshot image px / DPR
 - The yellow "debugging this tab" bar is expected — it confirms the tab is shared.
 - Prefer `snap` over `html` for understanding page structure.
 - Use `type` (not eval) to enter text in cross-origin iframes.
+- If the user drew annotations on the page, run `annotations` to get structured data about what they marked and which page elements are under each annotation.
+- Combine `annotations` + `shot` to fully understand what the user is pointing at.
