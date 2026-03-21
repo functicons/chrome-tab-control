@@ -14,7 +14,7 @@ A Chrome extension + CLI + AI skill that lets you selectively share browser tabs
 - 🌐 **Network monitoring** — watch requests/responses with POST bodies
 - 👁️ **Visual indicator** — shared tabs show flashing ⚪🟡 in the tab title
 - 🖱️ **Right-click to share** — share/unshare from the page context menu
-- ✏️ **Annotation overlay** — draw circles, rectangles, arrows, and text on any tab to communicate with the agent
+- ✏️ **Annotation** — draw circles, rectangles, arrows, and text on any tab to communicate with the agent
 - 📷 **Screenshot** — select an area, resize, and save to disk (`Cmd+Shift+S`)
 - 🚀 **Zero npm dependencies** — uses Node.js 22+ built-ins only
 
@@ -27,7 +27,7 @@ There are other ways to connect AI agents to Chrome. Here's how they compare:
 | **Control existing tabs** | ✅ Shared tabs only | ✅ All tabs | ✅ All tabs | ❌ Opens new tabs |
 | **Per-tab access control** | ✅ User chooses | ❌ All tabs exposed | ❌ All tabs exposed | N/A |
 | **No `--remote-debugging-port`** | ✅ Not needed | ❌ Required | ❌ Required | ✅ Not needed |
-| **Annotation overlay** | ✅ Draw on page | ❌ No | ❌ No | ❌ No |
+| **Annotation** | ✅ Draw on page | ❌ No | ❌ No | ❌ No |
 | **Console/network monitoring** | ✅ Real-time streaming | ❌ No | ✅ Via MCP tools | ❌ No |
 | **Works with any AI agent** | ✅ Any CLI-capable agent | ✅ Any CLI-capable agent | ✅ Any MCP client | ❌ Claude only |
 | **npm dependencies** | None | None | Yes | N/A (extension) |
