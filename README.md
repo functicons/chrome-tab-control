@@ -14,7 +14,7 @@ A Chrome extension + CLI + AI skill that lets you selectively share browser tabs
 - 🌐 **Network monitoring** — watch requests/responses with POST bodies
 - 👁️ **Visual indicator** — shared tabs show flashing ⚪🟡 in the tab title
 - 🖱️ **Right-click to share** — share/unshare from the page context menu
-- ✏️ **Annotation** — draw circles, rectangles, arrows, and text on any tab to communicate with the agent
+- ✏️ **Annotation** — draw circles, rectangles, arrows, and text to communicate with the agent
 - 📷 **Screenshot** — select an area, resize, and save to disk (`Cmd+Shift+S`)
 - 🚀 **Zero npm dependencies** — uses Node.js 22+ built-ins only
 
