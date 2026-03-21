@@ -137,8 +137,8 @@
   const DRAWING_TOOLS = ['circle', 'rect', 'arrow', 'text'];
 
   const tools = [
-    { id: 'circle', label: 'Circle (C)',    icon: '○' },
     { id: 'rect',   label: 'Rectangle (R)', icon: '□' },
+    { id: 'circle', label: 'Circle (C)',    icon: '○' },
     { id: 'arrow',  label: 'Arrow (A)',     icon: '→' },
     { id: 'text',   label: 'Text (T)',      icon: 'T' },
     { id: 'undo',   label: 'Undo (Cmd+Z)',  icon: '↩' },
