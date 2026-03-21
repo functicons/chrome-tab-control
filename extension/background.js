@@ -126,9 +126,9 @@ chrome.debugger.onEvent.addListener((source, method, params) => {
 chrome.debugger.onDetach.addListener((source, reason) => {
   const tabId = source.tabId;
   if (!sharedTabs.has(tabId)) return;
-  removeTitlePrefix(tabId);
   sharedTabs.delete(tabId);
   annotatingTabs.delete(tabId);
+  removeTitlePrefix(tabId);
   if (nativePort) {
     nativePort.postMessage({ type: 'tab_unshared', tabId, reason });
   }
@@ -213,27 +213,39 @@ async function addTitlePrefix(tabId) {
 }
 
 async function removeTitlePrefix(tabId) {
+  const cleanupFn = (icons) => {
+    if (window.__cdpTitleFlasher) {
+      clearInterval(window.__cdpTitleFlasher);
+      delete window.__cdpTitleFlasher;
+    }
+    if (window.__cdpTitleObserver) {
+      window.__cdpTitleObserver.disconnect();
+      delete window.__cdpTitleObserver;
+    }
+    let t = document.title;
+    for (const icon of icons) {
+      if (t.startsWith(icon + ' ')) { t = t.slice(icon.length + 1); break; }
+    }
+    document.title = t;
+  };
   try {
     await chrome.scripting.executeScript({
       target: { tabId },
-      func: (icons) => {
-        if (window.__cdpTitleFlasher) {
-          clearInterval(window.__cdpTitleFlasher);
-          delete window.__cdpTitleFlasher;
-        }
-        if (window.__cdpTitleObserver) {
-          window.__cdpTitleObserver.disconnect();
-          delete window.__cdpTitleObserver;
-        }
-        let t = document.title;
-        for (const icon of icons) {
-          if (t.startsWith(icon + ' ')) { t = t.slice(icon.length + 1); break; }
-        }
-        document.title = t;
-      },
+      func: cleanupFn,
       args: [TITLE_ICONS],
     });
-  } catch {}
+  } catch {
+    // Retry after a short delay (page may be mid-navigation)
+    setTimeout(async () => {
+      try {
+        await chrome.scripting.executeScript({
+          target: { tabId },
+          func: cleanupFn,
+          args: [TITLE_ICONS],
+        });
+      } catch {}
+    }, 500);
+  }
 }
 
 // Re-add prefix after page navigation; clear stale annotation state
@@ -264,14 +276,15 @@ async function shareTab(tabId) {
 }
 
 async function unshareTab(tabId) {
-  await removeTitlePrefix(tabId);
+  // Remove from sharedTabs first so onUpdated won't re-add the title prefix
+  sharedTabs.delete(tabId);
   annotatingTabs.delete(tabId);
+  await removeTitlePrefix(tabId);
   try {
     await chrome.debugger.detach({ tabId });
   } catch {
     // Already detached
   }
-  sharedTabs.delete(tabId);
   if (nativePort) {
     nativePort.postMessage({ type: 'tab_unshared', tabId, reason: 'user' });
   }
