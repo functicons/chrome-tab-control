@@ -27,10 +27,6 @@ function render(tabs) {
           <span class="tab-url">${escapeHtml(t.url)}</span>
         </div>
       </div>
-      <button class="annotate-btn ${t.annotating ? 'active' : ''}"
-              data-tab-id="${t.tabId}">
-        ${t.annotating ? 'Stop' : 'Annotate'}
-      </button>
       <button class="share-btn ${t.shared ? 'shared' : ''}"
               data-tab-id="${t.tabId}">
         ${t.shared ? 'Unshare' : 'Share'}
@@ -42,21 +38,6 @@ function render(tabs) {
 }
 
 tabsDiv.addEventListener('click', async (e) => {
-  const annotateBtn = e.target.closest('.annotate-btn');
-  if (annotateBtn && !annotateBtn.disabled) {
-    const tabId = parseInt(annotateBtn.dataset.tabId, 10);
-    const isAnnotating = annotateBtn.classList.contains('active');
-    annotateBtn.disabled = true;
-    annotateBtn.textContent = '...';
-    if (isAnnotating) {
-      await chrome.runtime.sendMessage({ type: 'annotate_done', tabId });
-    } else {
-      await chrome.runtime.sendMessage({ type: 'annotate', tabId });
-    }
-    loadTabs();
-    return;
-  }
-
   const btn = e.target.closest('.share-btn');
   if (!btn || btn.disabled) return;
 
