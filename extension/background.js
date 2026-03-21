@@ -236,11 +236,14 @@ async function removeTitlePrefix(tabId) {
   } catch {}
 }
 
-// Re-add prefix after page navigation
+// Re-add prefix after page navigation; clear stale annotation state
 chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
-  if (!sharedTabs.has(tabId)) return;
   if (changeInfo.status === 'complete') {
-    addTitlePrefix(tabId);
+    if (sharedTabs.has(tabId)) addTitlePrefix(tabId);
+    if (annotatingTabs.has(tabId)) {
+      annotatingTabs.delete(tabId);
+      broadcastState();
+    }
   }
 });
 
