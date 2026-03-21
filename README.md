@@ -27,6 +27,7 @@ There are other ways to connect AI agents to Chrome. Here's how they compare:
 | **Control existing tabs** | ✅ Shared tabs only | ✅ All tabs | ✅ All tabs | ❌ Opens new tabs |
 | **Per-tab access control** | ✅ User chooses | ❌ All tabs exposed | ❌ All tabs exposed | N/A |
 | **No `--remote-debugging-port`** | ✅ Not needed | ❌ Required | ❌ Required | ✅ Not needed |
+| **Annotation overlay** | ✅ Draw on page | ❌ No | ❌ No | ❌ No |
 | **Console/network monitoring** | ✅ Real-time streaming | ❌ No | ✅ Via MCP tools | ❌ No |
 | **Works with any AI agent** | ✅ Any CLI-capable agent | ✅ Any CLI-capable agent | ✅ Any MCP client | ❌ Claude only |
 | **npm dependencies** | None | None | Yes | N/A (extension) |
@@ -40,9 +41,22 @@ Chrome DevTools MCP and chrome-cdp-skill require Chrome to be launched with a sp
 
 Claude in Chrome opens fresh tabs for tasks. But often you want your AI agent to work with a page you're *already looking at* — debug a form that's misbehaving, extract data from a dashboard, or monitor network requests while you interact with the page.
 
-### Chrome Tab Control: the best of both worlds
+### The problem with "just describe it"
 
-Share only the tabs you want. Your agent sees what you allow, nothing more. No debug port, no new tabs — just point at a tab and say "help me with this."
+With every other tool, you have to *describe* what you're looking at in words: "the button in the top-right corner", "the third row in the table", "that error message". It's slow, ambiguous, and frustrating — like a remote pair programming session without screen sharing.
+
+### Chrome Tab Control: point, draw, and tell
+
+Share only the tabs you want. **Draw directly on the page** — circle a bug, arrow to a button, type "fix this" next to a broken layout. Your agent sees the annotations in screenshots *and* can programmatically query what you're pointing at:
+
+```
+tc annotations <tab>
+[rect] red at=(56,120) size=733x92
+  -> span "Minor UI changes for noise filter monitoring"
+  -> a[href="/dagang-w"] "dagang-w"
+```
+
+No debug port, no new tabs, no describing things in words — just point at your screen and say "help me with this."
 
 ## 🏗️ How It Works
 
