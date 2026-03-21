@@ -14,7 +14,8 @@ A Chrome extension + CLI + AI skill that lets you selectively share browser tabs
 - 🌐 **Network monitoring** — watch requests/responses with POST bodies
 - 👁️ **Visual indicator** — shared tabs show flashing ⚪🟡 in the tab title
 - 🖱️ **Right-click to share** — share/unshare from the page context menu
-- ✏️ **Annotation overlay** — draw circles, rectangles, arrows, and text on shared tabs to communicate with the agent
+- ✏️ **Annotation overlay** — draw circles, rectangles, arrows, and text on any tab to communicate with the agent
+- 📷 **Screenshot** — select an area, resize, and save to disk (`Cmd+Shift+S`)
 - 🚀 **Zero npm dependencies** — uses Node.js 22+ built-ins only
 
 ## 🤔 Why Chrome Tab Control?
@@ -110,38 +111,57 @@ make check
 
 ### Share a tab
 
-Three ways to share a tab:
+Two ways to share a tab:
 1. Click the 🤖 extension icon → click **Share** next to the tab
 2. Right-click anywhere on the page → **Share Tab**
-3. Use the keyboard shortcut to toggle annotation (which requires sharing first)
 
 The tab title will show a flashing ⚪🟡 indicator confirming it's shared.
 
 ### Annotate a tab
 
-Draw on a shared tab to visually communicate with the AI agent. Annotations appear in CDP screenshots, so the agent sees exactly what you marked up.
+Draw on any tab to visually communicate with the AI agent. Annotations work independently of sharing — no need to share a tab first. On shared tabs, annotations appear in CDP screenshots and can be queried via `tc annotations`.
 
 **Activate annotation mode** (3 ways):
-1. Click the 🤖 extension icon → click **Annotate** next to a shared tab
-2. Right-click on a shared tab → **Annotate Tab**
+1. Click the 🤖 extension icon → click **Annotate** next to any tab
+2. Right-click on any page → **Annotate**
 3. Press `Cmd+Shift+A` (Mac) / `Ctrl+Shift+A` (Windows/Linux)
 
 **Drawing tools** (floating toolbar or keyboard shortcuts):
 | Tool | Toolbar | Key | How to draw |
 |---|---|---|---|
-| Circle | ○ | `C` | Click and drag to define bounding box |
 | Rectangle | □ | `R` | Click and drag to define bounding box |
+| Circle | ○ | `C` | Click and drag to define bounding box |
 | Arrow | → | `A` | Click and drag from start to end |
 | Text | T | `T` | Click to place, type text, Enter to confirm |
 
-**Colors:** 6 colors available in the toolbar (red, blue, green, orange, purple, black). Switch via click or number keys `1`–`6`.
+**Moving annotations:** Click any annotation to select it (blue dashed outline), then drag to move. Press `Delete`/`Backspace` to remove the selected annotation. Works in any mode — no need to switch tools.
+
+**Colors:** Click the color dot in the toolbar to open a picker with 6 colors (red, blue, green, orange, purple, black). Or press number keys `1`–`6`.
 
 **Other controls:**
 | Action | Toolbar | Key |
 |---|---|---|
 | Undo | ↩ | `Cmd+Z` / `Ctrl+Z` |
 | Clear all | ✕ | — |
+| Minimize toolbar | ▾ | `M` |
 | Exit annotation | ✓ | `Esc` (press twice: first deselects tool, second exits) |
+
+The toolbar is draggable (grab the `⠿` handle) and minimizable. Annotations persist after exiting — re-enter annotation mode to edit them.
+
+### Screenshot
+
+Capture a selected area of any tab as a PNG image.
+
+**Activate** (3 ways):
+1. Click the 📷 button in the extension popup header
+2. Right-click on any page → **Screenshot**
+3. Press `Cmd+Shift+S` (Mac) / `Ctrl+Shift+S` (Windows/Linux)
+
+**Usage:**
+1. Drag to select an area (dimensions shown in pixels)
+2. Resize using the 8 handles, or drag to reposition
+3. Click **Capture** → Save As dialog appears
+4. Press **Cancel** or `Esc` to dismiss
 
 ### 🤖 Use with AI agents (Claude Code)
 
@@ -202,6 +222,9 @@ tc requests <tab> 30
 # Monitor both console + network together
 tc watch <tab> 60          # great for debugging interactions
 
+# List user-drawn annotations with underlying page elements
+tc annotations <tab>
+
 # Send raw CDP command
 tc evalraw <tab> "DOM.getDocument" "{}"
 ```
@@ -220,6 +243,7 @@ chrome-tab-control/
 │   ├── background.js
 │   ├── popup.html / popup.css / popup.js
 │   ├── annotate.js                        # Annotation overlay (injected on demand)
+│   ├── screenshot-select.js               # Screenshot area selector (injected on demand)
 │   └── icons/
 ├── scripts/                            # Setup & dev tools
 │   ├── install-tab-proxy.sh            # Tab proxy setup
