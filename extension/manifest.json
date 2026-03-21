@@ -36,6 +36,13 @@
         "mac": "Command+Shift+S"
       },
       "description": "Screenshot visible tab"
+    },
+    "extract-text": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+C",
+        "mac": "Command+Shift+C"
+      },
+      "description": "Extract text from selected area"
     }
   }
 }
