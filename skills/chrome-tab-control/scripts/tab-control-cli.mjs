@@ -219,32 +219,56 @@ async function annotationsStr(cdp) {
           desc = 'at=(' + Math.round(+el.getAttribute('x')) + ',' + Math.round(+el.getAttribute('y'))
             + ') text="' + el.textContent + '"';
         }
-        // Find page elements under the annotation
+        // Find page elements under the annotation by sampling multiple points
         let under = '';
         const root = document.getElementById('__tc-annotate-root');
         if (root && (tag === 'ellipse' || tag === 'rect' || tag === 'text' || tag === 'g')) {
-          let cx, cy;
+          const points = [];
           if (tag === 'g') {
+            // Arrow: sample the tip
             const ln = el.querySelector('line[marker-end]') || el.querySelector('line');
-            if (ln) { cx = +ln.getAttribute('x2'); cy = +ln.getAttribute('y2'); }
+            if (ln) points.push([+ln.getAttribute('x2'), +ln.getAttribute('y2')]);
           } else {
+            // Sample a grid of points within the bounding box
             const bbox = el.getBBox();
-            cx = bbox.x + bbox.width / 2;
-            cy = bbox.y + bbox.height / 2;
+            const cols = 3, rows = 3;
+            for (let r = 0; r < rows; r++) {
+              for (let c = 0; c < cols; c++) {
+                points.push([
+                  bbox.x + bbox.width * (c + 0.5) / cols,
+                  bbox.y + bbox.height * (r + 0.5) / rows,
+                ]);
+              }
+            }
           }
-          if (cx !== undefined) {
-            // Hide entire overlay so elementFromPoint hits the page
+          if (points.length) {
             const prev = root.style.display;
             root.style.display = 'none';
-            const pageEl = document.elementFromPoint(cx, cy);
-            root.style.display = prev;
-            if (pageEl) {
-              const sel = pageEl.tagName.toLowerCase()
-                + (pageEl.id ? '#' + pageEl.id : '')
-                + (pageEl.className && typeof pageEl.className === 'string' ? '.' + pageEl.className.trim().split(/\\s+/).join('.') : '');
-              const label = pageEl.getAttribute('aria-label') || pageEl.textContent?.slice(0, 50).trim() || '';
-              under = ' -> ' + sel + (label ? ' "' + label + '"' : '');
+            const seen = new Set();
+            const found = [];
+            for (const [px, py] of points) {
+              const pageEl = document.elementFromPoint(px, py);
+              if (!pageEl) continue;
+              // Deduplicate by element reference
+              if (seen.has(pageEl)) continue;
+              seen.add(pageEl);
+              const text = (pageEl.getAttribute('aria-label') || pageEl.innerText || '').trim();
+              if (!text) continue;
+              const tag = pageEl.tagName.toLowerCase();
+              let sel = tag;
+              if (pageEl.id) sel += '#' + pageEl.id;
+              const href = pageEl.getAttribute('href');
+              if (href) sel += '[href="' + href + '"]';
+              const role = pageEl.getAttribute('role');
+              if (role) sel += '[role="' + role + '"]';
+              const type = pageEl.getAttribute('type');
+              if (tag === 'input' && type) sel += '[type="' + type + '"]';
+              const name = pageEl.getAttribute('name');
+              if (name) sel += '[name="' + name + '"]';
+              found.push(sel + ' "' + text.slice(0, 80) + '"');
             }
+            root.style.display = prev;
+            if (found.length) under = ' -> ' + found.join(' | ');
           }
         }
         out.push('[' + type + '] ' + color + ' ' + desc + under);
