@@ -15,6 +15,7 @@ const MENU_SHARE_ID = 'tab-control-toggle';
 const MENU_ANNOTATE_ID = 'tab-control-annotate';
 const MENU_SCREENSHOT_ID = 'tab-control-screenshot';
 const MENU_EXTRACT_TEXT_ID = 'tab-control-extract-text';
+const MENU_SELECT_ELEMENT_ID = 'tab-control-select-element';
 
 function updateContextMenu(tabId) {
   const isShared = sharedTabs.has(tabId);
@@ -36,6 +37,12 @@ chrome.contextMenus.create({
 chrome.contextMenus.create({
   id: MENU_ANNOTATE_ID,
   title: 'Annotate',
+  contexts: ['page'],
+}, () => chrome.runtime.lastError);
+
+chrome.contextMenus.create({
+  id: MENU_SELECT_ELEMENT_ID,
+  title: 'Pin',
   contexts: ['page'],
 }, () => chrome.runtime.lastError);
 
@@ -69,6 +76,8 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
     screenshotTab(tab);
   } else if (info.menuItemId === MENU_EXTRACT_TEXT_ID) {
     extractTextFromArea(tab);
+  } else if (info.menuItemId === MENU_SELECT_ELEMENT_ID) {
+    selectElements(tab);
   }
 });
 
@@ -301,6 +310,21 @@ async function unshareTab(tabId) {
 }
 
 // ---------------------------------------------------------------------------
+// Element selector
+// ---------------------------------------------------------------------------
+
+async function selectElements(tab) {
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      files: ['element-pinner.js'],
+    });
+  } catch (e) {
+    console.warn('Element selector injection failed:', e.message);
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Extract text from area
 // ---------------------------------------------------------------------------
 
@@ -411,6 +435,8 @@ chrome.commands.onCommand.addListener(async (command) => {
     await screenshotTab(tab);
   } else if (command === 'copy-text') {
     await extractTextFromArea(tab);
+  } else if (command === 'select-elements') {
+    await selectElements(tab);
   }
 });
 

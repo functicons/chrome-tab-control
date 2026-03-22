@@ -15,7 +15,9 @@ A Chrome extension + CLI + AI skill that lets you selectively share browser tabs
 - 👁️ **Visual indicator** — shared tabs show flashing ⚪🟡 in the tab title
 - 🖱️ **Right-click to share** — share/unshare from the page context menu
 - ✏️ **Annotation** — draw circles, rectangles, arrows, and text to communicate with the agent
+- 🎯 **Element selector** — hover and click to pin specific DOM elements for the agent to inspect
 - 📷 **Screenshot** — select an area, resize, and save to disk (`Cmd+Shift+S`)
+- 📋 **Extract text** — drag-select an area to copy all visible text within it
 - 🚀 **Zero npm dependencies** — uses Node.js 22+ built-ins only
 
 ## 🤔 Why Chrome Tab Control?
@@ -162,6 +164,36 @@ Draw on any tab to visually communicate with the AI agent. Annotations work inde
 
 The toolbar is draggable (grab the `⠿` handle) and minimizable. Annotations persist after exiting — re-enter annotation mode to edit them.
 
+### Select elements
+
+Pin specific DOM elements so the AI agent knows exactly which elements you're referring to. More precise than annotations for targeting individual elements.
+
+**Activate** (2 ways):
+1. Right-click on any page → **Select**
+2. Press `Cmd+Shift+E` (Mac) / `Ctrl+Shift+E` (Windows/Linux)
+
+**Usage:**
+1. Hover over elements — they highlight with a blue overlay and selector label
+2. Click to **pin** an element (red highlight with numbered badge)
+3. Click a pinned element again to **unpin** it
+4. Pin as many elements as needed
+5. Click **Done** or press `Esc` to exit — pins stay visible on the page
+
+The agent can query pinned elements via `tc pins <tab>` to get exact selectors, positions, and text content.
+
+### Extract text
+
+Copy all visible text from a selected area — useful when elements are not easily selectable.
+
+**Activate** (2 ways):
+1. Right-click on any page → **Extract Text**
+2. Press `Cmd+Shift+C` (Mac) / `Ctrl+Shift+C` (Windows/Linux)
+
+**Usage:**
+1. Drag to select a rectangular area
+2. Text within the area is automatically copied to clipboard
+3. A toast notification confirms the copied text
+
 ### Screenshot
 
 Capture a selected area of any tab as a PNG image.
@@ -238,6 +270,9 @@ tc watch <tab> 60          # great for debugging interactions
 
 # List user-drawn annotations with underlying page elements
 tc annotations <tab>
+
+# List user-selected (pinned) elements
+tc pins <tab>
 
 # Send raw CDP command
 tc evalraw <tab> "DOM.getDocument" "{}"

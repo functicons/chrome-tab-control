@@ -193,6 +193,43 @@ async function snapshotStr(cdp) {
   return lines.join('\n');
 }
 
+async function picksStr(cdp) {
+  await cdp.send('Runtime.enable');
+  const { result } = await cdp.send('Runtime.evaluate', {
+    expression: `(() => {
+      const els = document.querySelectorAll('[data-tc-pinned]');
+      if (!els.length) return 'No pinned elements. Use Select (right-click > Select) to pin page elements.';
+      const out = [];
+      els.forEach((el) => {
+        const num = el.getAttribute('data-tc-pinned');
+        const tag = el.tagName.toLowerCase();
+        let sel = tag;
+        if (el.id) sel += '#' + el.id;
+        const href = el.getAttribute('href');
+        if (href) sel += '[href="' + href.slice(0, 80) + '"]';
+        const role = el.getAttribute('role');
+        if (role) sel += '[role="' + role + '"]';
+        const type = el.getAttribute('type');
+        if (tag === 'input' && type) sel += '[type="' + type + '"]';
+        const name = el.getAttribute('name');
+        if (name) sel += '[name="' + name + '"]';
+        const cls = el.className && typeof el.className === 'string'
+          ? el.className.trim().split(/\\s+/).slice(0, 3).join('.')
+          : '';
+        if (cls) sel += '.' + cls;
+        const text = (el.getAttribute('aria-label') || el.innerText || '').trim();
+        const rect = el.getBoundingClientRect();
+        const pos = 'at=(' + Math.round(rect.left) + ',' + Math.round(rect.top)
+          + ') size=' + Math.round(rect.width) + 'x' + Math.round(rect.height);
+        out.push('#' + num + ' ' + sel + ' ' + pos + (text ? ' "' + text.slice(0, 80) + '"' : ''));
+      });
+      return out.join('\\n');
+    })()`,
+    returnByValue: true,
+  });
+  return result.value;
+}
+
 async function annotationsStr(cdp) {
   await cdp.send('Runtime.enable');
   const { result } = await cdp.send('Runtime.evaluate', {
@@ -729,6 +766,7 @@ Usage: tab-control <command> [args]
   loadall <tab> <selector> [ms]     Click until element disappears
   evalraw <tab> <method> [json]     Raw CDP command
   annotations <tab>                 List user-drawn annotations with page context
+  pins <tab>                        List user-pinned elements (from Select)
 
 <tab> is a tab ID from "tab-control list" (or a unique prefix).
 
@@ -746,7 +784,7 @@ COORDINATES
 const NEEDS_TAB = new Set([
   'snap', 'snapshot', 'eval', 'shot', 'screenshot', 'html', 'nav', 'navigate',
   'net', 'network', 'console', 'requests', 'watch',
-  'click', 'clickxy', 'type', 'loadall', 'evalraw', 'annotations',
+  'click', 'clickxy', 'type', 'loadall', 'evalraw', 'annotations', 'pins',
 ]);
 
 async function main() {
@@ -809,6 +847,7 @@ async function main() {
     switch (cmd) {
       case 'snap': case 'snapshot': result = await snapshotStr(cdp); break;
       case 'annotations': result = await annotationsStr(cdp); break;
+      case 'pins': result = await picksStr(cdp); break;
       case 'eval': {
         const expr = cmdArgs.join(' ');
         if (!expr) { console.error('Error: expression required'); process.exit(1); }

@@ -43,6 +43,13 @@
         "mac": "Command+Shift+C"
       },
       "description": "Extract text from selected area"
+    },
+    "select-elements": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+E",
+        "mac": "Command+Shift+E"
+      },
+      "description": "Select and pin page elements"
     }
   }
 }

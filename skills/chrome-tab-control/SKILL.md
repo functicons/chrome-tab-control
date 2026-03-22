@@ -59,6 +59,22 @@ Output example:
 
 When the user says "look at what I circled" or "check my annotations", use `annotations` to understand what they marked, then use `shot` to see the visual context.
 
+### Get selected elements
+
+The user can use Select (right-click > Select, or `Cmd+Shift+E`) to hover over page elements and click to pin them. This is more precise than annotations for identifying specific DOM elements. Use this command to get the selected elements:
+
+```bash
+scripts/tab-control-cli.mjs pins <tab>
+```
+
+Output example:
+```
+#1 button#submit.btn.primary at=(200,400) size=120x36 "Submit Form"
+#2 input[type="email"][name="user_email"].form-input at=(200,350) size=300x32 "user@example.com"
+```
+
+When the user mentions "selected elements", "pinned elements", "my pins", or "elements I selected", they all refer to the same thing — use `pins` to retrieve them.
+
 ### Evaluate JavaScript
 
 ```bash
@@ -69,6 +85,7 @@ scripts/tab-control-cli.mjs eval <tab> <expr>
 
 ```bash
 scripts/tab-control-cli.mjs annotations <tab>             # list user annotations with page context
+scripts/tab-control-cli.mjs pins <tab>                   # list user-selected elements
 scripts/tab-control-cli.mjs html    <tab> [selector]    # full page or element HTML
 scripts/tab-control-cli.mjs nav     <tab> <url>          # navigate and wait for load
 scripts/tab-control-cli.mjs net     <tab>                # resource timing entries
@@ -99,3 +116,4 @@ CSS px = screenshot image px / DPR
 - Use `type` (not eval) to enter text in cross-origin iframes.
 - If the user drew annotations on the page, run `annotations` to get structured data about what they marked and which page elements are under each annotation.
 - Combine `annotations` + `shot` to fully understand what the user is pointing at.
+- Use `pins` when the user has selected specific elements — it gives exact selectors, positions, and text content.
