@@ -7,8 +7,10 @@
 //   snap  <tabId>                     Accessibility tree snapshot
 //   eval  <tabId> <expr>              Evaluate JS expression
 //   shot  <tabId> [file]              Screenshot (default: /tmp/screenshot.png)
+//   shot  <tabId> [file] --highlight <sel>  Screenshot with highlighted elements
 //   html  <tabId> [selector]          Get HTML (full page or element)
 //   nav   <tabId> <url>               Navigate and wait for load
+//   nav   <tabId> <url> --watch [s]  Navigate with console+network monitoring
 //   net   <tabId>                     Network performance entries
 //   click   <tabId> <selector>        Click element by CSS selector
 //   clickxy <tabId> <x> <y>           Click at CSS pixel coordinates
@@ -329,7 +331,7 @@ async function evalStr(cdp, expression) {
   return typeof val === 'object' ? JSON.stringify(val, null, 2) : String(val ?? '');
 }
 
-async function shotStr(cdp, filePath) {
+async function shotStr(cdp, filePath, highlightSelector) {
   let dpr = 1;
   try {
     const raw = await evalStr(cdp, 'window.devicePixelRatio');
@@ -337,12 +339,45 @@ async function shotStr(cdp, filePath) {
     if (parsed > 0) dpr = parsed;
   } catch {}
 
+  // Inject highlight overlay if selector provided
+  let highlightCount = 0;
+  if (highlightSelector) {
+    const countRaw = await evalStr(cdp, `
+      (function() {
+        const els = document.querySelectorAll(${JSON.stringify(highlightSelector)});
+        els.forEach(el => {
+          const rect = el.getBoundingClientRect();
+          const overlay = document.createElement('div');
+          overlay.setAttribute('data-tc-highlight', 'true');
+          overlay.style.cssText = 'position:fixed;z-index:2147483647;pointer-events:none;'
+            + 'border:3px solid #e53935;background:rgba(229,57,53,0.12);border-radius:3px;'
+            + 'left:' + rect.left + 'px;top:' + rect.top + 'px;'
+            + 'width:' + rect.width + 'px;height:' + rect.height + 'px;';
+          document.body.appendChild(overlay);
+        });
+        return els.length;
+      })()
+    `);
+    highlightCount = parseInt(countRaw) || 0;
+  }
+
   const { data } = await cdp.send('Page.captureScreenshot', { format: 'png' });
   const out = filePath || '/tmp/screenshot.png';
   writeFileSync(out, Buffer.from(data, 'base64'));
 
+  // Remove highlight overlays
+  if (highlightSelector) {
+    await evalStr(cdp, `
+      document.querySelectorAll('[data-tc-highlight]').forEach(el => el.remove());
+      'cleaned'
+    `).catch(() => {});
+  }
+
   const lines = [out];
   lines.push(`Screenshot saved. Device pixel ratio (DPR): ${dpr}`);
+  if (highlightCount > 0) {
+    lines.push(`Highlighted ${highlightCount} element(s) matching "${highlightSelector}"`);
+  }
   lines.push(`Coordinate mapping:`);
   lines.push(`  Screenshot pixels -> CSS pixels (for CDP Input events): divide by ${dpr}`);
   lines.push(`  e.g. screenshot point (${Math.round(100 * dpr)}, ${Math.round(200 * dpr)}) -> CSS (100, 200) -> use clickxy <tab> 100 200`);
@@ -379,6 +414,72 @@ async function navStr(cdp, url) {
   if (result.loaderId) { await loadEvent.promise; } else { loadEvent.cancel(); }
   await waitForDocumentReady(cdp, 5000);
   return `Navigated to ${url}`;
+}
+
+async function navWatchStr(cdp, url, postLoadSec = 2) {
+  // Set up console + network monitoring BEFORE navigating
+  await cdp.send('Runtime.enable');
+  await cdp.send('Log.enable');
+  await cdp.send('Network.enable');
+
+  let count = 0;
+  const messages = [];
+
+  function record(line) {
+    messages.push(line);
+    process.stdout.write(line + '\n');
+    count++;
+  }
+
+  cdp.onEvent('Runtime.consoleAPICalled', (params) => {
+    const ts = new Date(params.timestamp).toISOString().slice(11, 23);
+    const level = (params.type || 'log').toUpperCase();
+    record(`[CONSOLE ${level}] ${ts}  ${formatConsoleArgs(params.args)}`);
+  });
+
+  cdp.onEvent('Runtime.exceptionThrown', (params) => {
+    const ts = new Date(params.timestamp).toISOString().slice(11, 23);
+    const desc = params.exceptionDetails?.exception?.description
+      || params.exceptionDetails?.text || 'Unknown';
+    record(`[CONSOLE ERROR] ${ts}  ${desc}`);
+  });
+
+  cdp.onEvent('Log.entryAdded', (params) => {
+    const entry = params.entry || {};
+    const level = (entry.level || 'info').toUpperCase();
+    record(`[LOG ${level}] ${entry.text || ''}  ${entry.url || ''}`);
+  });
+
+  cdp.onEvent('Network.requestWillBeSent', (params) => {
+    const { request } = params;
+    record(`[NET -->] ${request.method} ${request.url.substring(0, 120)}`);
+  });
+
+  cdp.onEvent('Network.responseReceived', (params) => {
+    const { response } = params;
+    record(`[NET <--] ${response.status} ${response.url.substring(0, 120)}  (${response.mimeType || ''})`);
+  });
+
+  cdp.onEvent('Network.loadingFailed', (params) => {
+    const { errorText, canceled } = params;
+    record(`[NET FAIL] ${canceled ? 'CANCELED' : errorText}`);
+  });
+
+  // Navigate
+  console.error(`Navigating to ${url} with monitoring...`);
+  await cdp.send('Page.enable');
+  const loadEvent = cdp.waitForEvent('Page.loadEventFired', NAVIGATION_TIMEOUT);
+  const result = await cdp.send('Page.navigate', { url });
+  if (result.errorText) { loadEvent.cancel(); throw new Error(result.errorText); }
+  if (result.loaderId) { await loadEvent.promise; } else { loadEvent.cancel(); }
+  await waitForDocumentReady(cdp, 5000);
+
+  // Continue monitoring for a bit after load to catch post-load errors
+  console.error(`Page loaded. Monitoring for ${postLoadSec}s more...`);
+  await sleep(postLoadSec * 1000);
+
+  if (count === 0) return `Navigated to ${url}\nNo console/network events captured.`;
+  return `Navigated to ${url}\n${count} event(s) captured.`;
 }
 
 async function netStr(cdp) {
@@ -561,6 +662,39 @@ async function removeConsoleInterceptor(cdp) {
       returnByValue: true,
     });
   } catch {}
+}
+
+async function consoleHistoryStr(cdp) {
+  await cdp.send('Runtime.enable');
+
+  // Read from __tc_console_history injected by the extension on share
+  const raw = await evalStr(cdp, `
+    (function() {
+      const h = window.__tc_console_history;
+      if (!h || !h.length) return '[]';
+      return JSON.stringify(h);
+    })()
+  `);
+
+  const entries = JSON.parse(raw);
+  if (entries.length === 0) return 'No console history found. (History is captured from the moment the tab is shared.)';
+
+  const lines = entries.map((e) => {
+    const ts = new Date(e.ts).toISOString().slice(11, 23);
+    const level = (e.level || 'log').toUpperCase().padEnd(7);
+    return `${ts}  ${level}  ${e.text}`;
+  });
+  return lines.join('\n');
+}
+
+async function consoleClearStr(cdp) {
+  await cdp.send('Runtime.enable');
+  await evalStr(cdp, `
+    (function() {
+      if (window.__tc_console_history) window.__tc_console_history.length = 0;
+    })()
+  `);
+  return 'Console history cleared.';
 }
 
 async function consoleStr(cdp, durationSec = 5) {
@@ -750,14 +884,18 @@ const USAGE = `tab-control — interact with shared Chrome tabs (no --remote-deb
 
 Usage: tab-control <command> [args]
 
-  list                              List shared tabs
+  list                              List shared tabs (with connection status)
   snap  <tab>                       Accessibility tree snapshot
   eval  <tab> <expr>                Evaluate JS expression
   shot  <tab> [file]                Screenshot (default: /tmp/screenshot.png)
+  shot  <tab> [file] --highlight <sel>  Screenshot with elements highlighted
   html  <tab> [selector]            Get HTML (full page or CSS selector)
   nav   <tab> <url>                 Navigate to URL and wait for load
+  nav   <tab> <url> --watch [sec]   Navigate with console+network monitoring
   net   <tab>                       Network performance entries (from Performance API)
   console <tab> [seconds]           Monitor console output (default 5s)
+  console <tab> --history           Show buffered console/log entries
+  console <tab> --clear            Clear console history buffer
   requests <tab> [seconds]          Monitor network requests (default 5s)
   watch <tab> [seconds]             Monitor console + network together (default 10s)
   click   <tab> <selector>          Click element by CSS selector
@@ -799,14 +937,22 @@ async function main() {
   if (cmd === 'list' || cmd === 'ls') {
     const tabs = loadSharedTabs();
     if (tabs.length === 0) {
-      console.log('No shared tabs. Open the Tab Control extension and share a tab.');
+      console.log(`No shared tabs.
+
+To share a tab:
+  1. Click the Tab Control extension icon (puzzle piece → Tab Control) in Chrome
+  2. Click "Share" next to the tab you want to expose
+  3. A yellow "debugging this tab" bar confirms sharing is active
+  4. Re-run this command to see the shared tab`);
       return;
     }
     const idWidth = Math.max(...tabs.map((t) => String(t.tabId).length));
     for (const t of tabs) {
       const id = String(t.tabId).padEnd(idWidth);
+      const socketOk = existsSync(`${SOCK_PREFIX}${t.tabId}.sock`);
+      const status = socketOk ? '\u{1F7E1}' : '\u26AA';
       const title = (t.title || '').substring(0, 54).padEnd(54);
-      console.log(`${id}  ${title}  ${t.url}`);
+      console.log(`${id}  ${status} ${title}  ${t.url}`);
     }
     return;
   }
@@ -854,15 +1000,55 @@ async function main() {
         result = await evalStr(cdp, expr);
         break;
       }
-      case 'shot': case 'screenshot': result = await shotStr(cdp, cmdArgs[0]); break;
+      case 'shot': case 'screenshot': {
+        const hlIdx = cmdArgs.indexOf('--highlight');
+        let filePath = null;
+        let hlSelector = null;
+        if (hlIdx !== -1) {
+          hlSelector = cmdArgs[hlIdx + 1];
+          if (!hlSelector || hlSelector.startsWith('--')) {
+            console.error('Error: --highlight requires a CSS selector'); process.exit(1);
+          }
+          // File path is any arg before --highlight that doesn't start with --
+          filePath = cmdArgs.find((a, i) => i !== hlIdx && i !== hlIdx + 1 && !a.startsWith('--')) || null;
+        } else {
+          filePath = cmdArgs[0] || null;
+        }
+        result = await shotStr(cdp, filePath, hlSelector);
+        break;
+      }
       case 'html': result = await htmlStr(cdp, cmdArgs[0]); break;
       case 'nav': case 'navigate': {
-        if (!cmdArgs[0]) { console.error('Error: URL required'); process.exit(1); }
-        result = await navStr(cdp, cmdArgs[0]);
+        const watchIdx = cmdArgs.indexOf('--watch');
+        if (watchIdx !== -1) {
+          // Collect flag indices to skip: --watch and optionally the seconds arg after it
+          const skipIndices = new Set([watchIdx]);
+          let postSec = 2;
+          const nextArg = cmdArgs[watchIdx + 1];
+          if (nextArg && !nextArg.startsWith('--') && /^\d+$/.test(nextArg)) {
+            postSec = parseInt(nextArg);
+            skipIndices.add(watchIdx + 1);
+          }
+          const urlArg = cmdArgs.find((a, i) => !skipIndices.has(i) && !a.startsWith('--'));
+          if (!urlArg) { console.error('Error: URL required'); process.exit(1); }
+          result = await navWatchStr(cdp, urlArg, postSec);
+        } else {
+          if (!cmdArgs[0]) { console.error('Error: URL required'); process.exit(1); }
+          result = await navStr(cdp, cmdArgs[0]);
+        }
         break;
       }
       case 'net': case 'network': result = await netStr(cdp); break;
-      case 'console': result = await consoleStr(cdp, cmdArgs[0] ? parseInt(cmdArgs[0]) : 5); break;
+      case 'console': {
+        if (cmdArgs[0] === '--history') {
+          result = await consoleHistoryStr(cdp);
+        } else if (cmdArgs[0] === '--clear') {
+          result = await consoleClearStr(cdp);
+        } else {
+          result = await consoleStr(cdp, cmdArgs[0] ? parseInt(cmdArgs[0]) : 5);
+        }
+        break;
+      }
       case 'requests': result = await requestsStr(cdp, cmdArgs[0] ? parseInt(cmdArgs[0]) : 5); break;
       case 'watch': result = await watchStr(cdp, cmdArgs[0] ? parseInt(cmdArgs[0]) : 10); break;
       case 'click': result = await clickStr(cdp, cmdArgs[0]); break;

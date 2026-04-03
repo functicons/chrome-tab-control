@@ -266,10 +266,13 @@ async function removeTitlePrefix(tabId) {
   }
 }
 
-// Re-add prefix after page navigation; clear stale annotation state
+// Re-add prefix after page navigation; clear stale annotation state; re-inject console history
 chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
   if (changeInfo.status === 'complete') {
-    if (sharedTabs.has(tabId)) addTitlePrefix(tabId);
+    if (sharedTabs.has(tabId)) {
+      addTitlePrefix(tabId);
+      injectConsoleHistory(tabId);
+    }
     if (annotatingTabs.has(tabId)) {
       annotatingTabs.delete(tabId);
       broadcastState();
@@ -281,11 +284,66 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
 // Share / unshare
 // ---------------------------------------------------------------------------
 
+async function injectConsoleHistory(tabId) {
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      world: 'MAIN',
+      func: () => {
+        if (window.__tc_console_history) return;
+        const MAX = 500;
+        const history = [];
+        window.__tc_console_history = history;
+
+        // Patch console methods
+        ['log', 'info', 'warn', 'error', 'debug'].forEach(level => {
+          const orig = console[level].bind(console);
+          console[level] = (...args) => {
+            if (history.length < MAX) {
+              const serialized = args.map(a => {
+                if (a instanceof Error) return a.stack || a.message;
+                if (typeof a === 'object' && a !== null) {
+                  try { return JSON.stringify(a); } catch { return String(a); }
+                }
+                return String(a);
+              });
+              history.push({ level, ts: Date.now(), text: serialized.join(' ') });
+            }
+            orig(...args);
+          };
+        });
+
+        // Capture uncaught errors
+        window.addEventListener('error', (e) => {
+          if (history.length < MAX) {
+            const msg = e.error ? (e.error.stack || e.error.message) : e.message;
+            const loc = e.filename ? `  at ${e.filename}:${e.lineno}:${e.colno}` : '';
+            history.push({ level: 'error', ts: Date.now(), text: msg + loc });
+          }
+        });
+
+        // Capture unhandled promise rejections
+        window.addEventListener('unhandledrejection', (e) => {
+          if (history.length < MAX) {
+            const reason = e.reason instanceof Error
+              ? (e.reason.stack || e.reason.message) : String(e.reason);
+            history.push({ level: 'error', ts: Date.now(), text: 'Unhandled rejection: ' + reason });
+          }
+        });
+      },
+    });
+  } catch (e) {
+    console.warn('Console history injection failed:', e.message);
+  }
+}
+
 async function shareTab(tabId) {
   const tab = await chrome.tabs.get(tabId);
   await chrome.debugger.attach({ tabId }, '1.3');
 
   sharedTabs.set(tabId, { url: tab.url, title: tab.title });
+
+  await injectConsoleHistory(tabId);
 
   const port = ensureNativePort();
   port.postMessage({ type: 'tab_shared', tabId, url: tab.url, title: tab.title });

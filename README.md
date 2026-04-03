@@ -10,8 +10,9 @@ A Chrome extension + CLI + AI skill that lets you selectively share browser tabs
 - 📸 **Screenshots** — capture viewport with coordinate mapping
 - 🌳 **Accessibility tree** — structured page snapshot for AI understanding
 - ⌨️ **Interaction** — click elements, type text, navigate pages
-- 🔍 **Console monitoring** — capture `console.log`, errors, warnings in real time
+- 🔍 **Console monitoring** — capture `console.log`, errors, warnings in real time, with history buffer
 - 🌐 **Network monitoring** — watch requests/responses with POST bodies
+- 🧭 **Navigate + watch** — monitor console and network during page load in a single command
 - 👁️ **Visual indicator** — shared tabs show flashing ⚪🟡 in the tab title
 - 🖱️ **Right-click to share** — share/unshare from the page context menu
 - ✏️ **Annotation** — draw circles, rectangles, arrows, and text to communicate with the agent
@@ -236,6 +237,7 @@ tc list
 
 # Take a screenshot
 tc shot <tab>              # saves to /tmp/screenshot.png
+tc shot <tab> --highlight "button.primary"  # highlight matching elements
 
 # Accessibility tree snapshot (best for AI understanding)
 tc snap <tab>
@@ -245,6 +247,8 @@ tc eval <tab> "document.title"
 
 # Navigate
 tc nav <tab> https://example.com
+tc nav <tab> https://example.com --watch     # monitor console+network during load
+tc nav <tab> https://example.com --watch 5   # monitor for 5s after load
 
 # Click an element
 tc click <tab> "button.submit"
@@ -261,6 +265,8 @@ tc html <tab> ".sidebar"   # specific element
 
 # Monitor console output (real-time)
 tc console <tab> 30        # watch for 30 seconds
+tc console <tab> --history # show all console output since tab was shared
+tc console <tab> --clear   # clear console history buffer
 
 # Monitor network requests (real-time)
 tc requests <tab> 30

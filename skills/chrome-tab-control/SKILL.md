@@ -34,7 +34,10 @@ scripts/tab-control-cli.mjs list
 
 ```bash
 scripts/tab-control-cli.mjs shot <tab> [file]    # default: /tmp/screenshot.png
+scripts/tab-control-cli.mjs shot <tab> [file] --highlight <selector>  # highlight matching elements
 ```
+
+The `--highlight` flag draws a red overlay on all elements matching the CSS selector before taking the screenshot. Useful for confirming which elements exist and where they are on the page.
 
 ### Accessibility tree snapshot
 
@@ -88,6 +91,7 @@ scripts/tab-control-cli.mjs annotations <tab>             # list user annotation
 scripts/tab-control-cli.mjs pins <tab>                   # list user-selected elements
 scripts/tab-control-cli.mjs html    <tab> [selector]    # full page or element HTML
 scripts/tab-control-cli.mjs nav     <tab> <url>          # navigate and wait for load
+scripts/tab-control-cli.mjs nav     <tab> <url> --watch [sec]  # navigate with console+network monitoring
 scripts/tab-control-cli.mjs net     <tab>                # resource timing entries
 scripts/tab-control-cli.mjs click   <tab> <selector>     # click element by CSS selector
 scripts/tab-control-cli.mjs clickxy <tab> <x> <y>        # click at CSS pixel coordinates
@@ -95,6 +99,8 @@ scripts/tab-control-cli.mjs type    <tab> <text>          # type text at current
 scripts/tab-control-cli.mjs loadall <tab> <selector> [ms] # click until element disappears
 scripts/tab-control-cli.mjs evalraw <tab> <method> [json] # raw CDP command
 scripts/tab-control-cli.mjs console <tab> [seconds]       # monitor console output (default 5s)
+scripts/tab-control-cli.mjs console <tab> --history       # show buffered console/log entries
+scripts/tab-control-cli.mjs console <tab> --clear        # clear console history buffer
 scripts/tab-control-cli.mjs requests <tab> [seconds]      # monitor network requests (default 5s)
 scripts/tab-control-cli.mjs watch <tab> [seconds]         # monitor console + network together (default 10s)
 ```
@@ -117,3 +123,6 @@ CSS px = screenshot image px / DPR
 - If the user drew annotations on the page, run `annotations` to get structured data about what they marked and which page elements are under each annotation.
 - Combine `annotations` + `shot` to fully understand what the user is pointing at.
 - Use `pins` when the user has selected specific elements — it gives exact selectors, positions, and text content.
+- Use `nav <tab> <url> --watch` to capture console errors and network activity during page load — this is the best way to debug pages that break on load.
+- Use `shot <tab> --highlight <selector>` to visually confirm which elements match a selector before interacting with them.
+- Use `console <tab> --history` to check for errors that already occurred before you started monitoring — useful when a page is already broken.
