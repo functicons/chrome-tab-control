@@ -58,13 +58,25 @@ chrome.contextMenus.create({
   contexts: ['page'],
 }, () => chrome.runtime.lastError);
 
+function notifyError(tabId, message) {
+  console.warn('Tab Control:', message);
+  try {
+    chrome.notifications.create({
+      type: 'basic',
+      iconUrl: chrome.runtime.getURL('icons/icon48.png'),
+      title: 'Tab Control',
+      message,
+    });
+  } catch {}
+}
+
 chrome.contextMenus.onClicked.addListener((info, tab) => {
   if (!tab?.id) return;
   if (info.menuItemId === MENU_SHARE_ID) {
     if (sharedTabs.has(tab.id)) {
-      unshareTab(tab.id);
+      unshareTab(tab.id).catch((e) => notifyError(tab.id, e.message));
     } else {
-      shareTab(tab.id);
+      shareTab(tab.id).catch((e) => notifyError(tab.id, e.message));
     }
   } else if (info.menuItemId === MENU_ANNOTATE_ID) {
     if (annotatingTabs.has(tab.id)) {
@@ -337,8 +349,28 @@ async function injectConsoleHistory(tabId) {
   }
 }
 
+function getUnshareableReason(url) {
+  if (!url) return 'Tab has no URL';
+  const ownExtPrefix = `chrome-extension://${chrome.runtime.id}/`;
+  if (url.startsWith(ownExtPrefix)) return null;
+  if (url.startsWith('chrome-extension://')) {
+    return "Chrome does not allow attaching to another extension's pages";
+  }
+  if (url.startsWith('chrome://') || url.startsWith('chrome-untrusted://')
+      || url.startsWith('devtools://') || url.startsWith('view-source:')) {
+    return 'Chrome does not allow attaching to internal browser pages';
+  }
+  if (url.startsWith('https://chrome.google.com/webstore')
+      || url.startsWith('https://chromewebstore.google.com/')) {
+    return 'Chrome does not allow attaching to the Chrome Web Store';
+  }
+  return null;
+}
+
 async function shareTab(tabId) {
   const tab = await chrome.tabs.get(tabId);
+  const reason = getUnshareableReason(tab.url);
+  if (reason) throw new Error(reason);
   await chrome.debugger.attach({ tabId }, '1.3');
 
   sharedTabs.set(tabId, { url: tab.url, title: tab.title });
