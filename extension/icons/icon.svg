@@ -33,25 +33,25 @@
   <!-- Robot head overlay -->
   <g id="robot-head">
     <!-- Antenna stick + light -->
-    <line x1="256" y1="156" x2="256" y2="112" stroke="#374151" stroke-width="10" stroke-linecap="round"/>
-    <circle cx="256" cy="104" r="14" fill="#EF4444" stroke="#7F1D1D" stroke-width="3"/>
+    <line x1="256" y1="96" x2="256" y2="39" stroke="#374151" stroke-width="13" stroke-linecap="round"/>
+    <circle cx="256" cy="27" r="18" fill="#EF4444" stroke="#7F1D1D" stroke-width="4"/>
 
-    <!-- Head body (rounded square, slightly taller than wide) -->
-    <rect x="156" y="156" width="200" height="200" rx="36" ry="36"
-          fill="#E5E7EB" stroke="#374151" stroke-width="8"/>
+    <!-- Head body (rounded square) -->
+    <rect x="96" y="96" width="320" height="320" rx="57" ry="57"
+          fill="#E5E7EB" stroke="#374151" stroke-width="12"/>
 
     <!-- Eye sockets -->
-    <circle cx="214" cy="242" r="26" fill="#111827"/>
-    <circle cx="298" cy="242" r="26" fill="#111827"/>
+    <circle cx="188" cy="234" r="42" fill="#111827"/>
+    <circle cx="324" cy="234" r="42" fill="#111827"/>
     <!-- Glowing pupils -->
-    <circle cx="214" cy="242" r="14" fill="#22D3EE"/>
-    <circle cx="298" cy="242" r="14" fill="#22D3EE"/>
+    <circle cx="188" cy="234" r="22" fill="#22D3EE"/>
+    <circle cx="324" cy="234" r="22" fill="#22D3EE"/>
     <!-- Pupil highlights -->
-    <circle cx="220" cy="236" r="5" fill="#FFFFFF"/>
-    <circle cx="304" cy="236" r="5" fill="#FFFFFF"/>
+    <circle cx="198" cy="224" r="9" fill="#FFFFFF"/>
+    <circle cx="314" cy="224" r="9" fill="#FFFFFF"/>
 
     <!-- Smile -->
-    <path d="M 210 296 Q 256 348 302 296" stroke="#374151" stroke-width="11"
+    <path d="M 182 320 Q 256 404 330 320" stroke="#374151" stroke-width="17"
           stroke-linecap="round" fill="none"/>
   </g>
 </svg>
