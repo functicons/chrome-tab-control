@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <!--
+    Chrome-style logo:
+      - Three 120-degree colored sectors around the outside
+      - Red top, green bottom-left, yellow bottom-right
+      - Blue center circle with a white ring
+      - Transparent background
+
+    Geometry (math angles, 0=east, CCW positive; converted to SVG with y-flip):
+      outer radius = 250, inner radius = 100, center = (256, 256)
+      Red sector:    theta in [ 30,  150] (top)
+      Green sector:  theta in [150,  270] (bottom-left, through 180/west)
+      Yellow sector: theta in [-90,   30] (bottom-right, through 0/east)
+      White ring outer radius = 100; blue center radius = 90
+  -->
+
+  <!-- Red sector (top) -->
+  <path d="M 342.60 206 L 472.51 131 A 250 250 0 0 0 39.49 131 L 169.40 206 A 100 100 0 0 1 342.60 206 Z" fill="#EA4335"/>
+
+  <!-- Yellow sector (bottom-right) -->
+  <path d="M 256 356 L 256 506 A 250 250 0 0 0 472.51 131 L 342.60 206 A 100 100 0 0 1 256 356 Z" fill="#FBBC05"/>
+
+  <!-- Green sector (bottom-left) -->
+  <path d="M 169.40 206 L 39.49 131 A 250 250 0 0 0 256 506 L 256 356 A 100 100 0 0 1 169.40 206 Z" fill="#34A853"/>
+
+  <!-- White ring (visible as 10px ring around the blue center) -->
+  <circle cx="256" cy="256" r="100" fill="#FFFFFF"/>
+
+  <!-- Blue center disc (~35% of icon diameter) -->
+  <circle cx="256" cy="256" r="90" fill="#4285F4"/>
+</svg>
