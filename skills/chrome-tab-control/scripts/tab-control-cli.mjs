@@ -9,8 +9,10 @@
 //   shot  <tabId> [file]              Screenshot (default: /tmp/screenshot.png)
 //   shot  <tabId> [file] --highlight <sel>  Screenshot with highlighted elements
 //   html  <tabId> [selector]          Get HTML (full page or element)
-//   nav   <tabId> <url>               Navigate and wait for load
+//   nav   <tabId> <url>               Navigate and wait for load (same-host only)
 //   nav   <tabId> <url> --watch [s]  Navigate with console+network monitoring
+//   nav   <tabId> <url> --cross-origin  Allow navigation to a different host
+//   refresh <tabId> [--hard]          Reload current URL (no host change)
 //   net   <tabId>                     Network performance entries
 //   click   <tabId> <selector>        Click element by CSS selector
 //   clickxy <tabId> <x> <y>           Click at CSS pixel coordinates
@@ -406,6 +408,25 @@ async function waitForDocumentReady(cdp, timeoutMs = NAVIGATION_TIMEOUT) {
   throw new Error('Timed out waiting for navigation to finish');
 }
 
+function hostnameOf(url) {
+  try { return new URL(url).hostname; } catch { return null; }
+}
+
+// Permission check: nav must stay on the same hostname unless --cross-origin.
+// A tab on about:blank or chrome://* has no real origin to protect, so any nav is allowed.
+async function assertSameHostNav(cdp, targetUrl) {
+  const currentUrl = await evalStr(cdp, 'location.href');
+  const currentHost = hostnameOf(currentUrl);
+  if (!currentHost || /^(about:|chrome:|chrome-extension:|edge:)/i.test(currentUrl)) return;
+  const targetHost = hostnameOf(targetUrl);
+  if (!targetHost) {
+    throw new Error(`Refusing nav: target URL has no hostname (${targetUrl}). Pass --cross-origin to override.`);
+  }
+  if (currentHost !== targetHost) {
+    throw new Error(`Refusing cross-host nav: ${currentHost} → ${targetHost}. Pass --cross-origin to override, or use "refresh" to reload the current URL.`);
+  }
+}
+
 async function navStr(cdp, url) {
   await cdp.send('Page.enable');
   const loadEvent = cdp.waitForEvent('Page.loadEventFired', NAVIGATION_TIMEOUT);
@@ -414,6 +435,21 @@ async function navStr(cdp, url) {
   if (result.loaderId) { await loadEvent.promise; } else { loadEvent.cancel(); }
   await waitForDocumentReady(cdp, 5000);
   return `Navigated to ${url}`;
+}
+
+async function refreshStr(cdp, hard = false) {
+  await cdp.send('Page.enable');
+  const loadEvent = cdp.waitForEvent('Page.loadEventFired', NAVIGATION_TIMEOUT);
+  try {
+    await cdp.send('Page.reload', { ignoreCache: hard });
+  } catch (e) {
+    loadEvent.cancel();
+    throw e;
+  }
+  await loadEvent.promise;
+  await waitForDocumentReady(cdp, 5000);
+  const url = await evalStr(cdp, 'location.href');
+  return `${hard ? 'Hard-refreshed' : 'Refreshed'} ${url}`;
 }
 
 async function navWatchStr(cdp, url, postLoadSec = 2) {
@@ -890,8 +926,10 @@ Usage: tab-control <command> [args]
   shot  <tab> [file]                Screenshot (default: /tmp/screenshot.png)
   shot  <tab> [file] --highlight <sel>  Screenshot with elements highlighted
   html  <tab> [selector]            Get HTML (full page or CSS selector)
-  nav   <tab> <url>                 Navigate to URL and wait for load
+  nav   <tab> <url>                 Navigate to URL and wait for load (same-host only)
   nav   <tab> <url> --watch [sec]   Navigate with console+network monitoring
+  nav   <tab> <url> --cross-origin  Allow navigation to a different host
+  refresh <tab> [--hard]            Reload current URL (--hard bypasses cache)
   net   <tab>                       Network performance entries (from Performance API)
   console <tab> [seconds]           Monitor console output (default 5s)
   console <tab> --history           Show buffered console/log entries
@@ -921,6 +959,7 @@ COORDINATES
 
 const NEEDS_TAB = new Set([
   'snap', 'snapshot', 'eval', 'shot', 'screenshot', 'html', 'nav', 'navigate',
+  'refresh', 'reload',
   'net', 'network', 'console', 'requests', 'watch',
   'click', 'clickxy', 'type', 'loadall', 'evalraw', 'annotations', 'pins',
 ]);
@@ -1019,23 +1058,30 @@ To share a tab:
       }
       case 'html': result = await htmlStr(cdp, cmdArgs[0]); break;
       case 'nav': case 'navigate': {
+        const crossOrigin = cmdArgs.includes('--cross-origin');
         const watchIdx = cmdArgs.indexOf('--watch');
+        let urlArg, postSec = 2;
         if (watchIdx !== -1) {
-          // Collect flag indices to skip: --watch and optionally the seconds arg after it
           const skipIndices = new Set([watchIdx]);
-          let postSec = 2;
           const nextArg = cmdArgs[watchIdx + 1];
           if (nextArg && !nextArg.startsWith('--') && /^\d+$/.test(nextArg)) {
             postSec = parseInt(nextArg);
             skipIndices.add(watchIdx + 1);
           }
-          const urlArg = cmdArgs.find((a, i) => !skipIndices.has(i) && !a.startsWith('--'));
-          if (!urlArg) { console.error('Error: URL required'); process.exit(1); }
-          result = await navWatchStr(cdp, urlArg, postSec);
+          urlArg = cmdArgs.find((a, i) => !skipIndices.has(i) && !a.startsWith('--'));
         } else {
-          if (!cmdArgs[0]) { console.error('Error: URL required'); process.exit(1); }
-          result = await navStr(cdp, cmdArgs[0]);
+          urlArg = cmdArgs.find((a) => !a.startsWith('--'));
         }
+        if (!urlArg) { console.error('Error: URL required'); process.exit(1); }
+        if (!crossOrigin) await assertSameHostNav(cdp, urlArg);
+        result = watchIdx !== -1
+          ? await navWatchStr(cdp, urlArg, postSec)
+          : await navStr(cdp, urlArg);
+        break;
+      }
+      case 'refresh': case 'reload': {
+        const hard = cmdArgs.includes('--hard');
+        result = await refreshStr(cdp, hard);
         break;
       }
       case 'net': case 'network': result = await netStr(cdp); break;

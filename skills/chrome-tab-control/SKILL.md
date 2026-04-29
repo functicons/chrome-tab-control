@@ -90,8 +90,10 @@ scripts/tab-control-cli.mjs eval <tab> <expr>
 scripts/tab-control-cli.mjs annotations <tab>             # list user annotations with page context
 scripts/tab-control-cli.mjs pins <tab>                   # list user-selected elements
 scripts/tab-control-cli.mjs html    <tab> [selector]    # full page or element HTML
-scripts/tab-control-cli.mjs nav     <tab> <url>          # navigate and wait for load
+scripts/tab-control-cli.mjs nav     <tab> <url>          # navigate and wait for load (same-host only)
 scripts/tab-control-cli.mjs nav     <tab> <url> --watch [sec]  # navigate with console+network monitoring
+scripts/tab-control-cli.mjs nav     <tab> <url> --cross-origin  # allow navigation to a different host
+scripts/tab-control-cli.mjs refresh <tab> [--hard]       # reload current URL (--hard bypasses cache)
 scripts/tab-control-cli.mjs net     <tab>                # resource timing entries
 scripts/tab-control-cli.mjs click   <tab> <selector>     # click element by CSS selector
 scripts/tab-control-cli.mjs clickxy <tab> <x> <y>        # click at CSS pixel coordinates
@@ -124,5 +126,6 @@ CSS px = screenshot image px / DPR
 - Combine `annotations` + `shot` to fully understand what the user is pointing at.
 - Use `pins` when the user has selected specific elements — it gives exact selectors, positions, and text content.
 - Use `nav <tab> <url> --watch` to capture console errors and network activity during page load — this is the best way to debug pages that break on load.
+- `nav` is restricted to the tab's current hostname by default; this protects the user's trust boundary on the shared tab. To go to a different host, the user (or the agent with explicit user consent) must pass `--cross-origin`. Prefer `refresh` when you only need to reload the current page.
 - Use `shot <tab> --highlight <selector>` to visually confirm which elements match a selector before interacting with them.
 - Use `console <tab> --history` to check for errors that already occurred before you started monitoring — useful when a page is already broken.
