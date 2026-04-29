@@ -245,10 +245,15 @@ tc snap <tab>
 # Evaluate JavaScript
 tc eval <tab> "document.title"
 
-# Navigate
+# Navigate (same-host only by default)
 tc nav <tab> https://example.com
-tc nav <tab> https://example.com --watch     # monitor console+network during load
-tc nav <tab> https://example.com --watch 5   # monitor for 5s after load
+tc nav <tab> https://example.com --watch       # monitor console+network during load
+tc nav <tab> https://example.com --watch 5     # monitor for 5s after load
+tc nav <tab> https://other.com --cross-origin  # opt in to cross-host navigation
+
+# Reload the current page (no host change, no URL needed)
+tc refresh <tab>
+tc refresh <tab> --hard                       # bypass cache
 
 # Click an element
 tc click <tab> "button.submit"
