@@ -49,7 +49,7 @@
         "default": "Ctrl+Shift+E",
         "mac": "Command+Shift+E"
       },
-      "description": "Select and pin page elements"
+      "description": "Select and highlight page elements"
     }
   }
 }

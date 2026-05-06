@@ -1,17 +1,17 @@
-// Tab Control — Element pinner (injected into tab)
-// Hover to highlight elements, click to pin them. Pinned elements
+// Tab Control — Element highlighter (injected into tab)
+// Hover to preview elements, click to highlight them. Highlighted elements
 // can be queried by the AI agent via the CLI.
 
 (function () {
   'use strict';
 
   const ROOT_ID = '__tc-element-selector';
-  const PIN_ATTR = 'data-tc-pinned';
+  const HIGHLIGHT_ATTR = 'data-tc-highlighted';
   const FONT = "-apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif";
-  const HIGHLIGHT_COLOR = 'rgba(26, 115, 232, 0.15)';
-  const HIGHLIGHT_BORDER = 'rgba(26, 115, 232, 0.8)';
-  const PIN_COLOR = 'rgba(229, 57, 53, 0.12)';
-  const PIN_BORDER = 'rgba(229, 57, 53, 0.8)';
+  const HOVER_COLOR = 'rgba(26, 115, 232, 0.15)';
+  const HOVER_BORDER = 'rgba(26, 115, 232, 0.8)';
+  const HIGHLIGHT_COLOR = 'rgba(229, 57, 53, 0.12)';
+  const HIGHLIGHT_BORDER = 'rgba(229, 57, 53, 0.8)';
 
   // Toggle off if already active
   const existing = document.getElementById(ROOT_ID);
@@ -21,7 +21,7 @@
   }
 
   // --- State ---
-  const pinnedElements = []; // {el, overlay, badge}
+  const highlightedElements = []; // {el, overlay, badge}
   let hoverOverlay = null;
   let hoverLabel = null;
   let active = true;
@@ -38,12 +38,12 @@
     fontFamily: FONT,
   });
 
-  // --- Hover highlight overlay ---
+  // --- Hover preview overlay ---
   hoverOverlay = document.createElement('div');
   Object.assign(hoverOverlay.style, {
     position: 'fixed',
-    background: HIGHLIGHT_COLOR,
-    border: '2px solid ' + HIGHLIGHT_BORDER,
+    background: HOVER_COLOR,
+    border: '2px solid ' + HOVER_BORDER,
     borderRadius: '2px',
     pointerEvents: 'none',
     display: 'none',
@@ -95,7 +95,7 @@
   });
 
   const statusText = document.createElement('span');
-  statusText.textContent = 'Pin elements · Click to pin';
+  statusText.textContent = 'Highlight elements · Click to highlight';
   Object.assign(statusText.style, { color: '#555', fontWeight: '500' });
   toolbar.appendChild(statusText);
 
@@ -160,14 +160,14 @@
   }
 
   function updateStatus() {
-    const count = pinnedElements.length;
+    const count = highlightedElements.length;
     statusText.textContent = count > 0
-      ? count + ' pinned · Click to pin/unpin'
-      : 'Pin elements · Click to pin';
+      ? count + ' highlighted · Click to highlight/unhighlight'
+      : 'Highlight elements · Click to highlight';
   }
 
-  // --- Pin overlay + badge for a pinned element ---
-  function createPinOverlay(el, index) {
+  // --- Highlight overlay + badge for a highlighted element ---
+  function createHighlightOverlay(el, index) {
     const rect = el.getBoundingClientRect();
     const overlay = document.createElement('div');
     Object.assign(overlay.style, {
@@ -176,8 +176,8 @@
       top: rect.top + 'px',
       width: rect.width + 'px',
       height: rect.height + 'px',
-      background: PIN_COLOR,
-      border: '2px solid ' + PIN_BORDER,
+      background: HIGHLIGHT_COLOR,
+      border: '2px solid ' + HIGHLIGHT_BORDER,
       borderRadius: '2px',
       pointerEvents: 'none',
       zIndex: '2147483645',
@@ -192,7 +192,7 @@
       width: '20px',
       height: '20px',
       borderRadius: '50%',
-      background: PIN_BORDER,
+      background: HIGHLIGHT_BORDER,
       color: '#fff',
       fontSize: '11px',
       fontWeight: '700',
@@ -207,8 +207,8 @@
     return { overlay, badge };
   }
 
-  function refreshPinOverlays() {
-    pinnedElements.forEach((p, i) => {
+  function refreshHighlightOverlays() {
+    highlightedElements.forEach((p, i) => {
       const rect = p.el.getBoundingClientRect();
       Object.assign(p.overlay.style, {
         left: rect.left + 'px',
@@ -252,26 +252,26 @@
     e.preventDefault();
     e.stopPropagation();
 
-    // Check if already pinned → unpin
-    const idx = pinnedElements.findIndex((p) => p.el === el);
+    // Already highlighted → unhighlight
+    const idx = highlightedElements.findIndex((p) => p.el === el);
     if (idx !== -1) {
-      const removed = pinnedElements.splice(idx, 1)[0];
+      const removed = highlightedElements.splice(idx, 1)[0];
       removed.overlay.remove();
-      removed.el.removeAttribute(PIN_ATTR);
+      removed.el.removeAttribute(HIGHLIGHT_ATTR);
       // Re-number remaining
-      pinnedElements.forEach((p, i) => {
-        p.el.setAttribute(PIN_ATTR, String(i + 1));
+      highlightedElements.forEach((p, i) => {
+        p.el.setAttribute(HIGHLIGHT_ATTR, String(i + 1));
       });
-      refreshPinOverlays();
+      refreshHighlightOverlays();
       updateStatus();
       return;
     }
 
-    // Pin the element
-    const pinIndex = pinnedElements.length;
-    el.setAttribute(PIN_ATTR, String(pinIndex + 1));
-    const { overlay: pinOverlay, badge } = createPinOverlay(el, pinIndex);
-    pinnedElements.push({ el, overlay: pinOverlay, badge });
+    // Highlight the element
+    const highlightIndex = highlightedElements.length;
+    el.setAttribute(HIGHLIGHT_ATTR, String(highlightIndex + 1));
+    const { overlay: highlightOverlay, badge } = createHighlightOverlay(el, highlightIndex);
+    highlightedElements.push({ el, overlay: highlightOverlay, badge });
     updateStatus();
   }
 
@@ -286,18 +286,18 @@
   document.addEventListener('click', onClick, true);
   document.addEventListener('keydown', onKeyDown, true);
 
-  // Refresh pin positions on scroll/resize (stays active after deactivation)
-  const refreshHandler = () => { if (pinnedElements.length) refreshPinOverlays(); };
+  // Refresh highlight positions on scroll/resize (stays active after deactivation)
+  const refreshHandler = () => { if (highlightedElements.length) refreshHighlightOverlays(); };
   window.addEventListener('scroll', refreshHandler, true);
   window.addEventListener('resize', refreshHandler);
 
   // --- Button handlers ---
   clearBtn.addEventListener('click', () => {
-    pinnedElements.forEach((p) => {
+    highlightedElements.forEach((p) => {
       p.overlay.remove();
-      p.el.removeAttribute(PIN_ATTR);
+      p.el.removeAttribute(HIGHLIGHT_ATTR);
     });
-    pinnedElements.length = 0;
+    highlightedElements.length = 0;
     updateStatus();
   });
 
@@ -310,9 +310,9 @@
     document.removeEventListener('mousemove', onMouseMove, true);
     document.removeEventListener('click', onClick, true);
     document.removeEventListener('keydown', onKeyDown, true);
-    // Keep scroll/resize handlers alive so pin overlays follow elements
-    // Move pin overlays to body so they persist
-    pinnedElements.forEach((p) => {
+    // Keep scroll/resize handlers alive so highlight overlays follow elements.
+    // Move highlight overlays to body so they persist.
+    highlightedElements.forEach((p) => {
       document.documentElement.appendChild(p.overlay);
     });
     root.remove();

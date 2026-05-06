@@ -201,11 +201,11 @@ async function picksStr(cdp) {
   await cdp.send('Runtime.enable');
   const { result } = await cdp.send('Runtime.evaluate', {
     expression: `(() => {
-      const els = document.querySelectorAll('[data-tc-pinned]');
-      if (!els.length) return 'No pinned elements. Use Select (right-click > Select) to pin page elements.';
+      const els = document.querySelectorAll('[data-tc-highlighted]');
+      if (!els.length) return 'No highlighted elements. Use Highlight (right-click > Highlight) to highlight page elements.';
       const out = [];
       els.forEach((el) => {
-        const num = el.getAttribute('data-tc-pinned');
+        const num = el.getAttribute('data-tc-highlighted');
         const tag = el.tagName.toLowerCase();
         let sel = tag;
         if (el.id) sel += '#' + el.id;

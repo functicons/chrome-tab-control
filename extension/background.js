@@ -42,7 +42,7 @@ chrome.contextMenus.create({
 
 chrome.contextMenus.create({
   id: MENU_SELECT_ELEMENT_ID,
-  title: 'Pin',
+  title: 'Highlight',
   contexts: ['page'],
 }, () => chrome.runtime.lastError);
 
@@ -407,7 +407,7 @@ async function selectElements(tab) {
   try {
     await chrome.scripting.executeScript({
       target: { tabId: tab.id },
-      files: ['element-pinner.js'],
+      files: ['element-highlighter.js'],
     });
   } catch (e) {
     console.warn('Element selector injection failed:', e.message);
