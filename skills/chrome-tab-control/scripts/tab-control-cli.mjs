@@ -26,6 +26,7 @@ import net from 'net';
 import { readFileSync, writeFileSync, existsSync } from 'fs';
 import { homedir } from 'os';
 import { resolve } from 'path';
+import { fileURLToPath } from 'url';
 
 const CONFIG_DIR = resolve(homedir(), '.chrome-tab-control');
 const SHARED_TABS_FILE = resolve(CONFIG_DIR, 'shared-tabs.json');
@@ -327,7 +328,7 @@ async function evalStr(cdp, expression) {
     expression, returnByValue: true, awaitPromise: true,
   });
   if (result.exceptionDetails) {
-    throw new Error(result.exceptionDetails.text || result.exceptionDetails.exception?.description);
+    throw new Error(result.exceptionDetails.exception?.description || result.exceptionDetails.text);
   }
   const val = result.result.value;
   return typeof val === 'object' ? JSON.stringify(val, null, 2) : String(val ?? '');
@@ -528,31 +529,96 @@ async function netStr(cdp) {
   ).join('\n');
 }
 
-async function clickStr(cdp, selector) {
+// A genuine pointer sequence. Synthetic .click() is ignored by some frameworks
+// (notably Angular Material), and only real input grants transient user activation.
+async function dispatchRealClick(cdp, x, y) {
+  const base = { x, y, button: 'left', clickCount: 1, modifiers: 0 };
+  await cdp.send('Input.dispatchMouseEvent', { ...base, type: 'mouseMoved' });
+  await cdp.send('Input.dispatchMouseEvent', { ...base, type: 'mousePressed' });
+  await sleep(50);
+  await cdp.send('Input.dispatchMouseEvent', { ...base, type: 'mouseReleased' });
+}
+
+// Elements that actually respond to a click. Wrapper components (Angular/React
+// custom elements) frequently carry the stable test id while the real target is
+// an <a> or <button> inside them — clicking the wrapper is a silent no-op.
+const INTERACTIVE_SELECTOR = [
+  'a[href]', 'button', 'input', 'select', 'textarea', 'summary', 'label',
+  '[role="button"]', '[role="link"]', '[role="menuitem"]', '[role="tab"]',
+  '[role="option"]', '[role="checkbox"]', '[onclick]', '[tabindex]:not([tabindex="-1"])',
+].join(', ');
+
+async function clickStr(cdp, selector, { real = false, exact = false } = {}) {
   if (!selector) throw new Error('CSS selector required');
-  const result = await evalStr(cdp, `
+
+  // Resolve, redirect and click inside ONE evaluation. Frameworks that re-render
+  // (Angular, React) routinely swap the node between two CDP round-trips, so a
+  // resolve-then-click split silently fires on a detached element and does nothing.
+  const info = await evalStr(cdp, `
     (function() {
-      const el = document.querySelector(${JSON.stringify(selector)});
-      if (!el) return JSON.stringify({ ok: false, error: 'Element not found: ' + ${JSON.stringify(selector)} });
-      el.scrollIntoView({ block: 'center' });
-      el.click();
-      return JSON.stringify({ ok: true, tag: el.tagName, text: el.textContent.trim().substring(0, 80) });
+      const sel = ${JSON.stringify(selector)};
+      const el = document.querySelector(sel);
+      if (!el) return JSON.stringify({ ok: false, error: 'Element not found: ' + sel });
+      el.scrollIntoView({ block: 'center', inline: 'center' });
+
+      const INTERACTIVE = ${JSON.stringify(INTERACTIVE_SELECTOR)};
+      let target = el, redirectedFrom = null;
+      if (!${JSON.stringify(exact)} && !el.matches(INTERACTIVE)) {
+        const inner = el.querySelector(INTERACTIVE);
+        if (inner) { target = inner; redirectedFrom = el.tagName; }
+      }
+
+      const rect = target.getBoundingClientRect();
+      // offsetParent is null for position:fixed elements, so it cannot serve as a
+      // visibility test — it would reject modals, sticky toolbars and floating
+      // buttons. checkVisibility() handles fixed, display:none and visibility:hidden.
+      const visible = rect.width > 0 && rect.height > 0 && (
+        typeof target.checkVisibility === 'function'
+          ? target.checkVisibility()
+          : getComputedStyle(target).visibility !== 'hidden'
+      );
+      const out = {
+        ok: true,
+        tag: target.tagName,
+        redirectedFrom,
+        visible,
+        interactive: target.matches(INTERACTIVE),
+        text: (target.textContent || '').trim().replace(/\\s+/g, ' ').substring(0, 60),
+        x: rect.left + rect.width / 2,
+        y: rect.top + rect.height / 2,
+      };
+      if (visible && !${JSON.stringify(real)}) target.click();
+      return JSON.stringify(out);
     })()
   `);
-  const r = JSON.parse(result);
+
+  const r = JSON.parse(info);
   if (!r.ok) throw new Error(r.error);
-  return `Clicked <${r.tag}> "${r.text}"`;
+
+  if (!r.visible) {
+    throw new Error(
+      `Element for "${selector}" resolved to <${r.tag}> but is not visible ` +
+      `(zero size or not rendered), so clicking it would do nothing. ` +
+      `Wait for it to appear, or target the visible control.`
+    );
+  }
+
+  if (real) {
+    await dispatchRealClick(cdp, r.x, r.y);
+  }
+
+  let out = `Clicked <${r.tag}> "${r.text}"`;
+  if (real) out += ' (real mouse events)';
+  if (r.redirectedFrom) out += `\n  note: "${selector}" matched <${r.redirectedFrom}>, which is not clickable — clicked its inner <${r.tag}> instead.`;
+  if (!r.interactive) out += `\n  warning: <${r.tag}> has no interactive role. If nothing happened, retry with --real.`;
+  return out;
 }
 
 async function clickXyStr(cdp, x, y) {
   const cx = parseFloat(x);
   const cy = parseFloat(y);
   if (isNaN(cx) || isNaN(cy)) throw new Error('x and y must be numbers (CSS pixels)');
-  const base = { x: cx, y: cy, button: 'left', clickCount: 1, modifiers: 0 };
-  await cdp.send('Input.dispatchMouseEvent', { ...base, type: 'mouseMoved' });
-  await cdp.send('Input.dispatchMouseEvent', { ...base, type: 'mousePressed' });
-  await sleep(50);
-  await cdp.send('Input.dispatchMouseEvent', { ...base, type: 'mouseReleased' });
+  await dispatchRealClick(cdp, cx, cy);
   return `Clicked at CSS (${cx}, ${cy})`;
 }
 
@@ -560,6 +626,232 @@ async function typeStr(cdp, text) {
   if (text == null || text === '') throw new Error('text required');
   await cdp.send('Input.insertText', { text });
   return `Typed ${text.length} characters`;
+}
+
+// Focus an element. A synthetic .click() does NOT move focus to a contenteditable,
+// so clicking a rich-text composer and then typing silently types into nothing.
+async function focusStr(cdp, selector) {
+  if (!selector) throw new Error('CSS selector required');
+  const attempt = () => evalStr(cdp, `
+    (function() {
+      const el = document.querySelector(${JSON.stringify(selector)});
+      if (!el) return JSON.stringify({ ok: false, error: 'Element not found: ' + ${JSON.stringify(selector)} });
+      el.scrollIntoView({ block: 'center', inline: 'center' });
+      el.focus({ preventScroll: true });
+      const active = document.activeElement;
+      const rect = el.getBoundingClientRect();
+      return JSON.stringify({
+        ok: true,
+        focused: active === el || el.contains(active),
+        tag: el.tagName,
+        x: rect.left + rect.width / 2,
+        y: rect.top + rect.height / 2,
+        visible: rect.width > 0 && rect.height > 0,
+      });
+    })()
+  `);
+
+  let r = JSON.parse(await attempt());
+  if (!r.ok) throw new Error(r.error);
+
+  // Some editors only take focus from a genuine pointer event.
+  if (!r.focused && r.visible) {
+    await dispatchRealClick(cdp, r.x, r.y);
+    r = JSON.parse(await attempt());
+  }
+  if (!r.focused) {
+    throw new Error(`Could not move focus to "${selector}" (<${r.tag}>). Typing would go to the wrong element.`);
+  }
+  return `Focused <${r.tag}>`;
+}
+
+// Replace an element's entire content with `text`: focus it, select what is
+// there, then insert. Input.insertText replaces the selection, so this both
+// clears stale content and avoids appending to it.
+async function fillStr(cdp, selector, text) {
+  if (!selector) throw new Error('CSS selector required');
+  if (text == null) throw new Error('text required');
+
+  await focusStr(cdp, selector);
+  await evalStr(cdp, `
+    (function() {
+      const el = document.querySelector(${JSON.stringify(selector)});
+      if (!el) return 0;
+      if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') { el.select(); return 1; }
+      const range = document.createRange();
+      range.selectNodeContents(el);
+      const sel = window.getSelection();
+      sel.removeAllRanges();
+      sel.addRange(range);
+      return 1;
+    })()
+  `);
+  await cdp.send('Input.insertText', { text });
+
+  // Verify, so a silent no-op fails here rather than somewhere downstream.
+  const got = await evalStr(cdp, `
+    (function() {
+      const el = document.querySelector(${JSON.stringify(selector)});
+      if (!el) return '';
+      return (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') ? (el.value || '') : (el.textContent || '');
+    })()
+  `);
+  if (!got.includes(text.trim().slice(0, 40))) {
+    throw new Error(
+      `Filled "${selector}" but its content does not contain the text. ` +
+      `Expected to find ${JSON.stringify(text.slice(0, 40))}, element now holds ${JSON.stringify(got.slice(0, 80))}.`
+    );
+  }
+  return `Filled <${selector}> with ${text.length} characters`;
+}
+
+// Chrome grants transient user activation to CDP-dispatched input only in a
+// FOREGROUND tab. Sites that gate an action behind user activation therefore
+// accept the click and silently do nothing while the tab is in the background.
+async function bringToFrontStr(cdp) {
+  await cdp.send('Page.bringToFront');
+  // visibilitychange lands asynchronously, so poll briefly before reporting.
+  let state = 'hidden';
+  for (let i = 0; i < 10; i++) {
+    state = await evalStr(cdp, 'document.visibilityState');
+    if (state === 'visible') break;
+    await sleep(100);
+  }
+  if (state !== 'visible') {
+    throw new Error(
+      `Tab was activated but still reports "${state}" — the Chrome window is probably ` +
+      'minimised or on another desktop. Actions gated behind user activation (sending, ' +
+      'uploads, clipboard) would silently do nothing, so this is reported as a failure.'
+    );
+  }
+  return 'Tab brought to front (visible)';
+}
+
+// ---------------------------------------------------------------------------
+// Key presses
+// ---------------------------------------------------------------------------
+
+// Input.insertText cannot produce key events, so text-only typing never submits
+// a form or triggers a keyboard shortcut. These are dispatched as real key events.
+const KEY_DEFS = {
+  enter: { key: 'Enter', code: 'Enter', keyCode: 13, text: '\r' },
+  tab: { key: 'Tab', code: 'Tab', keyCode: 9, text: '\t' },
+  space: { key: ' ', code: 'Space', keyCode: 32, text: ' ' },
+  escape: { key: 'Escape', code: 'Escape', keyCode: 27 },
+  esc: { key: 'Escape', code: 'Escape', keyCode: 27 },
+  backspace: { key: 'Backspace', code: 'Backspace', keyCode: 8 },
+  delete: { key: 'Delete', code: 'Delete', keyCode: 46 },
+  up: { key: 'ArrowUp', code: 'ArrowUp', keyCode: 38 },
+  down: { key: 'ArrowDown', code: 'ArrowDown', keyCode: 40 },
+  left: { key: 'ArrowLeft', code: 'ArrowLeft', keyCode: 37 },
+  right: { key: 'ArrowRight', code: 'ArrowRight', keyCode: 39 },
+  home: { key: 'Home', code: 'Home', keyCode: 36 },
+  end: { key: 'End', code: 'End', keyCode: 35 },
+  pageup: { key: 'PageUp', code: 'PageUp', keyCode: 33 },
+  pagedown: { key: 'PageDown', code: 'PageDown', keyCode: 34 },
+};
+
+// CDP Input modifier bitmask
+const MODIFIER_BITS = { alt: 1, ctrl: 2, control: 2, meta: 4, cmd: 4, command: 4, shift: 8 };
+const SHIFT_BIT = 8;
+// Each press costs a round trip plus a gap, so an unbounded count would block for
+// many minutes with no way to interrupt it cleanly.
+const MAX_KEY_REPEAT = 500;
+
+export function parseKeySpec(spec) {
+  if (!spec) throw new Error(`key required, e.g. Enter, Shift+Enter, Escape. Known: ${Object.keys(KEY_DEFS).join(', ')}`);
+  const parts = String(spec).split('+').map((part) => part.trim()).filter(Boolean);
+  const name = (parts.pop() || '').toLowerCase();
+  let modifiers = 0;
+  for (const mod of parts) {
+    const bit = MODIFIER_BITS[mod.toLowerCase()];
+    if (!bit) throw new Error(`Unknown modifier "${mod}". Known: alt, ctrl, cmd, shift`);
+    modifiers |= bit;
+  }
+  const def = KEY_DEFS[name];
+  if (!def) throw new Error(`Unknown key "${name}". Known: ${Object.keys(KEY_DEFS).join(', ')}`);
+  return { def, modifiers, label: (parts.length ? `${parts.join('+')}+` : '') + def.key };
+}
+
+export function parseRepeat(repeat) {
+  if (repeat == null) return 1;
+  const n = parseInt(repeat, 10);
+  if (!Number.isFinite(n) || n < 1) return 1;
+  if (n > MAX_KEY_REPEAT) throw new Error(`repeat count ${n} exceeds the maximum of ${MAX_KEY_REPEAT}`);
+  return n;
+}
+
+async function keyStr(cdp, spec, repeat = 1) {
+  const { def, modifiers, label } = parseKeySpec(spec);
+  const n = parseRepeat(repeat);
+
+  const base = {
+    modifiers,
+    key: def.key,
+    code: def.code,
+    windowsVirtualKeyCode: def.keyCode,
+    nativeVirtualKeyCode: def.keyCode,
+  };
+  // Chrome suppresses the character payload when a non-shift modifier is held.
+  const textPart = def.text && !(modifiers & ~SHIFT_BIT)
+    ? { text: def.text, unmodifiedText: def.text }
+    : {};
+
+  for (let i = 0; i < n; i++) {
+    await cdp.send('Input.dispatchKeyEvent', { type: 'keyDown', ...base, ...textPart });
+    await cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', ...base });
+    if (i < n - 1) await sleep(20);
+  }
+  return n > 1 ? `Pressed ${label} x${n}` : `Pressed ${label}`;
+}
+
+// ---------------------------------------------------------------------------
+// Wait for a page-side condition
+// ---------------------------------------------------------------------------
+
+export function parseWaitForArgs(args) {
+  const skip = new Set();
+  const numFlag = (flag, scale, unit) => {
+    const i = args.indexOf(flag);
+    if (i === -1) return null;
+    const raw = parseFloat(args[i + 1]);
+    if (!isFinite(raw) || raw <= 0) throw new Error(`${flag} requires a positive number of ${unit}`);
+    skip.add(i);
+    skip.add(i + 1);
+    return Math.round(raw * scale);
+  };
+  const timeoutMs = numFlag('--timeout', 1000, 'seconds') ?? 60000;
+  const intervalMs = numFlag('--interval', 1, 'milliseconds') ?? 250;
+  const expression = args.filter((a, i) => !skip.has(i)).join(' ').trim();
+  return { expression, timeoutMs, intervalMs };
+}
+
+// Polls from the CLI rather than inside a single evaluate, so the wait is not
+// bounded by the per-command CDP TIMEOUT.
+async function waitForStr(cdp, expression, { timeoutMs = 60000, intervalMs = 250 } = {}) {
+  if (!expression) throw new Error('expression required');
+  const started = Date.now();
+  let lastError = null;
+  while (Date.now() - started < timeoutMs) {
+    try {
+      if (await evalStr(cdp, `!!(${expression})`) === 'true') {
+        return `Condition met after ${Date.now() - started}ms`;
+      }
+      lastError = null;
+    } catch (e) {
+      // A runtime error is expected while waiting for something to exist, but a
+      // syntax error can never become true — fail now instead of at the timeout.
+      if (/SyntaxError/.test(e.message)) {
+        throw new Error(`Invalid JS expression: ${e.message}`);
+      }
+      lastError = e.message;
+    }
+    await sleep(intervalMs);
+  }
+  throw new Error(
+    `Timed out after ${timeoutMs}ms waiting for ${expression.slice(0, 200)}` +
+    (lastError ? ` (last evaluation error: ${lastError})` : '')
+  );
 }
 
 async function loadAllStr(cdp, selector, intervalMs = 1500) {
@@ -937,8 +1229,16 @@ Usage: tab-control <command> [args]
   requests <tab> [seconds]          Monitor network requests (default 5s)
   watch <tab> [seconds]             Monitor console + network together (default 10s)
   click   <tab> <selector>          Click element by CSS selector
+  click   <tab> <selector> --real   Click via real mouse events at element centre
+  click   <tab> <selector> --exact  Never redirect to an inner clickable child
   clickxy <tab> <x> <y>             Click at CSS pixel coordinates
-  type    <tab> <text>              Type text at current focus
+  type    <tab> <text>              Insert text at current focus (no key events)
+  key     <tab> <key> [count]       Press a key: Enter, Shift+Enter, Escape, Tab...
+  focus   <tab> <selector>          Move focus to an element (real click if needed)
+  front   <tab>                     Bring the tab to the foreground (grants user activation)
+  fill    <tab> <selector> <text>   Focus, select all, and replace content with text
+  waitfor <tab> <js-expr>           Wait until a JS expression is truthy
+  waitfor <tab> <expr> --timeout <sec> --interval <ms>
   loadall <tab> <selector> [ms]     Click until element disappears
   evalraw <tab> <method> [json]     Raw CDP command
   annotations <tab>                 List user-drawn annotations with page context
@@ -962,6 +1262,7 @@ const NEEDS_TAB = new Set([
   'refresh', 'reload',
   'net', 'network', 'console', 'requests', 'watch',
   'click', 'clickxy', 'type', 'loadall', 'evalraw', 'annotations', 'pins',
+  'key', 'waitfor', 'focus', 'fill', 'front',
 ]);
 
 async function main() {
@@ -1097,7 +1398,15 @@ To share a tab:
       }
       case 'requests': result = await requestsStr(cdp, cmdArgs[0] ? parseInt(cmdArgs[0]) : 5); break;
       case 'watch': result = await watchStr(cdp, cmdArgs[0] ? parseInt(cmdArgs[0]) : 10); break;
-      case 'click': result = await clickStr(cdp, cmdArgs[0]); break;
+      case 'click': {
+        const selector = cmdArgs.find((a) => !a.startsWith('--'));
+        if (!selector) { console.error('Error: CSS selector required'); process.exit(1); }
+        result = await clickStr(cdp, selector, {
+          real: cmdArgs.includes('--real'),
+          exact: cmdArgs.includes('--exact'),
+        });
+        break;
+      }
       case 'clickxy': result = await clickXyStr(cdp, cmdArgs[0], cmdArgs[1]); break;
       case 'type': {
         const text = cmdArgs.join(' ');
@@ -1106,6 +1415,22 @@ To share a tab:
         break;
       }
       case 'loadall': result = await loadAllStr(cdp, cmdArgs[0], cmdArgs[1] ? parseInt(cmdArgs[1]) : 1500); break;
+      case 'key': result = await keyStr(cdp, cmdArgs[0], cmdArgs[1]); break;
+      case 'focus': result = await focusStr(cdp, cmdArgs[0]); break;
+      case 'front': result = await bringToFrontStr(cdp); break;
+      case 'fill': {
+        const sel2 = cmdArgs[0];
+        const text = cmdArgs.slice(1).join(' ');
+        if (!sel2) { console.error('Error: CSS selector required'); process.exit(1); }
+        result = await fillStr(cdp, sel2, text);
+        break;
+      }
+      case 'waitfor': {
+        const { expression, timeoutMs, intervalMs } = parseWaitForArgs(cmdArgs);
+        if (!expression) { console.error('Error: JS expression required'); process.exit(1); }
+        result = await waitForStr(cdp, expression, { timeoutMs, intervalMs });
+        break;
+      }
       case 'evalraw': {
         if (!cmdArgs[0]) { console.error('Error: CDP method required'); process.exit(1); }
         const jsonParams = cmdArgs.length > 2 ? cmdArgs.slice(1).join(' ') : cmdArgs[1];
@@ -1130,4 +1455,8 @@ To share a tab:
   }
 }
 
-main().catch((e) => { console.error(e.message); process.exit(1); });
+// Guarded so tests can import the exported parsers without running the CLI.
+const invokedDirectly = process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+if (invokedDirectly) {
+  main().catch((e) => { console.error(e.message); process.exit(1); });
+}

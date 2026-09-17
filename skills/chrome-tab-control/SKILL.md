@@ -105,7 +105,73 @@ scripts/tab-control-cli.mjs console <tab> --history       # show buffered consol
 scripts/tab-control-cli.mjs console <tab> --clear        # clear console history buffer
 scripts/tab-control-cli.mjs requests <tab> [seconds]      # monitor network requests (default 5s)
 scripts/tab-control-cli.mjs watch <tab> [seconds]         # monitor console + network together (default 10s)
+scripts/tab-control-cli.mjs key <tab> <key> [count]       # press a key (Enter, Shift+Enter, Escape, Tab...)
+scripts/tab-control-cli.mjs waitfor <tab> <js-expr>       # wait until a JS expression is truthy
+scripts/tab-control-cli.mjs front <tab>                   # bring tab to foreground (user activation)
 ```
+
+### Focus and fill inputs
+
+```bash
+scripts/tab-control-cli.mjs focus <tab> <selector>
+scripts/tab-control-cli.mjs fill  <tab> <selector> <text>
+```
+
+**Use `fill` rather than `click` + `type` for text entry.** A synthetic click does
+not move focus to a `contenteditable` (rich-text editors, chat composers), so
+`click` then `type` silently types into nothing. `fill` focuses the element —
+falling back to real mouse events when `.focus()` is refused — selects any existing
+content so the text is *replaced* rather than appended, inserts the text, and then
+verifies it actually landed, failing loudly if it did not.
+
+### Bring a tab to the foreground
+
+```bash
+scripts/tab-control-cli.mjs front <tab>
+```
+
+**Chrome grants transient user activation to CDP-dispatched input only while the
+tab is in the foreground.** Any site action gated behind a user gesture — sending
+a message, uploading a file, opening a file picker, clipboard access, popups —
+is therefore **accepted and silently ignored** in a background tab: no error, no
+console message, no network request. It looks exactly like a hang.
+
+Diagnose it directly, then fix it:
+
+```bash
+scripts/tab-control-cli.mjs eval  <tab> "navigator.userActivation.isActive"   # false right after a click => this
+scripts/tab-control-cli.mjs front <tab>                                       # then retry the click
+```
+
+`front` necessarily switches the user's visible tab, so only use it when an action
+actually needs a gesture. It exits non-zero if the tab is still not visible
+afterwards (minimised window), rather than reporting a success the page will not honour.
+
+### Press keys
+
+`type` uses `Input.insertText`, which inserts characters without producing key
+events — it can never submit a form or fire a keyboard shortcut. Use `key` for that.
+
+```bash
+scripts/tab-control-cli.mjs key <tab> Enter
+scripts/tab-control-cli.mjs key <tab> Shift+Enter      # newline instead of submit
+scripts/tab-control-cli.mjs key <tab> Escape
+scripts/tab-control-cli.mjs key <tab> Down 3           # press a key repeatedly
+```
+
+Modifiers: `alt`, `ctrl`, `cmd`/`meta`, `shift`.
+
+### Wait for a condition
+
+Polls from the CLI, so the wait is not limited by the 15s per-command CDP timeout.
+
+```bash
+scripts/tab-control-cli.mjs waitfor <tab> "document.querySelector('.results')"
+scripts/tab-control-cli.mjs waitfor <tab> "window.done === true" --timeout 120 --interval 500
+```
+
+`--timeout` is in seconds (default 60), `--interval` in milliseconds (default 250).
+It exits non-zero on timeout, so it is safe to chain with `&&`.
 
 ## Coordinates
 
@@ -128,4 +194,8 @@ CSS px = screenshot image px / DPR
 - Use `nav <tab> <url> --watch` to capture console errors and network activity during page load — this is the best way to debug pages that break on load.
 - `nav` is restricted to the tab's current hostname by default; this protects the user's trust boundary on the shared tab. To go to a different host, the user (or the agent with explicit user consent) must pass `--cross-origin`. Prefer `refresh` when you only need to reload the current page.
 - Use `shot <tab> --highlight <selector>` to visually confirm which elements match a selector before interacting with them.
+- `click` reports what it actually clicked. If the CSS selector matches a non-clickable wrapper (common with Angular/React custom elements, where the stable `data-test-id` sits on the wrapper), it automatically clicks the interactive `<a>`/`<button>` inside it and says so. Pass `--exact` to suppress that, or `--real` to use real mouse events when a synthetic `.click()` is ignored.
+- Prefer `waitfor` over sleeping or repeated `eval` polling — it fails loudly with a timeout instead of silently continuing too early.
+- **Extract text with `textContent`, not `innerText`.** A shared tab is usually in the background, where Chrome throttles animations and timers. `innerText` returns only *rendered* text, so on any site that animates content in, it lags badly or stays empty — measured on Gemini: `textContent` held the full 242-character answer at 3s while `innerText` showed 67 characters and then froze entirely once the tab went hidden. Reading `innerText` there silently yields a *truncated* answer, not an obviously broken one. Use `textContent` and rebuild line breaks from block elements if structure matters.
+- Check `document.visibilityState` when a page seems frozen or content never arrives — a hidden tab behaves very differently from the one the user is looking at.
 - Use `console <tab> --history` to check for errors that already occurred before you started monitoring — useful when a page is already broken.

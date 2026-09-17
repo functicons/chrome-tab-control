@@ -121,7 +121,8 @@ make install-skill
 ### 4. Verify setup
 
 ```bash
-make check
+make check   # dependencies (Node, Chrome, tab proxy, skill)
+make test    # unit tests for argument parsing (no browser needed)
 ```
 
 ## 🚀 Usage
@@ -285,9 +286,55 @@ tc annotations <tab>
 # List user-selected (pinned) elements
 tc pins <tab>
 
+# Focus / fill inputs (prefer fill over click+type for text entry)
+tc focus <tab> "textarea.prompt"
+tc fill  <tab> "textarea.prompt" "some text"   # focus + select-all + insert + verify
+
+# Press a key (type cannot: it inserts text without key events)
+tc key <tab> Enter
+tc key <tab> Shift+Enter          # newline instead of submit
+tc key <tab> Down 3               # repeat a key
+
+# Wait for a page condition (not bound by the 15s per-command timeout)
+tc waitfor <tab> "document.querySelector('.results')"
+tc waitfor <tab> "window.ready === true" --timeout 120 --interval 500
+
+# Bring tab to foreground (required for gesture-gated actions)
+tc front <tab>
+
 # Send raw CDP command
 tc evalraw <tab> "DOM.getDocument" "{}"
 ```
+
+## ⚠️ Foreground-only: user activation
+
+The most expensive gotcha in this tool. Chrome grants **transient user activation**
+to CDP-dispatched input *only while the tab is in the foreground*. Any site action
+gated behind a user gesture — sending a message, uploading, opening a file picker,
+clipboard access — is **accepted and silently ignored** in a background tab. No
+error, no console message, no network request. It looks exactly like a hang, and is
+easy to misdiagnose as rate limiting or an expired session.
+
+```bash
+tc eval  <tab> "navigator.userActivation.isActive"   # false right after a click => this bug
+tc front <tab>                                       # bring it forward, then retry
+```
+
+`tc front` switches the user's visible tab, so reach for it only when the action
+genuinely needs a gesture. It exits non-zero if the tab still is not visible
+afterwards (a minimised window, or another desktop) rather than reporting a
+success the page will not honour.
+
+## ⚠️ Background tabs change what you can read
+
+`innerText` reports only **rendered** text. Shared tabs are usually backgrounded,
+where Chrome throttles animations, so on any site that animates content in,
+`innerText` lags or stays empty while `textContent` is unaffected. Measured on one
+chat UI: `textContent` held the complete 242-character answer at 3s, where
+`innerText` showed 67 characters and then froze at 86 once the tab went hidden.
+
+The failure is quiet — you get a **truncated** answer rather than an error. Extract
+with `textContent` and rebuild line breaks from block elements if structure matters.
 
 ## 🔧 Architecture
 
@@ -310,6 +357,8 @@ chrome-tab-control/
 │   ├── install-skill.sh                # Install as Claude Code skill
 │   ├── check.sh                        # Verify dependencies
 │   └── gen-icons.mjs                   # Icon generator
+├── tests/                              # Unit tests (node --test, no deps)
+│   └── cli.test.mjs
 └── skills/chrome-tab-control/          # Skill directory (what AI agents use)
     ├── SKILL.md                        # Skill manifest
     └── scripts/

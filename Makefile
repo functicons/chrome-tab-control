@@ -1,7 +1,7 @@
 SKILL_DIR = skills/chrome-tab-control
 CLI       = $(SKILL_DIR)/scripts/tab-control-cli.mjs
 
-.PHONY: help check install-tab-proxy install-skill icons list
+.PHONY: help check test install-tab-proxy install-skill icons list
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | sort | \
@@ -9,6 +9,9 @@ help: ## Show this help
 
 check: ## Verify required dependencies
 	@scripts/check.sh
+
+test: ## Run unit tests (pure argument-parsing logic)
+	@node --test tests/*.test.mjs
 
 install-tab-proxy: ## Install tab proxy for Chrome native messaging
 	scripts/install-tab-proxy.sh
