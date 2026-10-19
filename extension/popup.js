@@ -1,5 +1,18 @@
 const tabsDiv = document.getElementById('tabs');
 const statusEl = document.getElementById('status');
+const COPIED_FEEDBACK_MS = 2000;
+
+// Tab whose Copy button shows "Copied!". Kept as state (not a DOM tweak) because
+// sharing broadcasts a state update that re-renders the list.
+let copiedTabId = null;
+let copiedTimer = null;
+
+function markCopied(tabId) {
+  copiedTabId = tabId;
+  clearTimeout(copiedTimer);
+  copiedTimer = setTimeout(() => { copiedTabId = null; loadTabs(); }, COPIED_FEEDBACK_MS);
+  loadTabs();
+}
 
 function escapeHtml(s) {
   const el = document.createElement('span');
@@ -7,7 +20,14 @@ function escapeHtml(s) {
   return el.innerHTML;
 }
 
-function render(tabs) {
+// The tab the user is looking at goes first: it is almost always the one
+// being shared or whose tab handle is needed.
+function activeFirst(tabs, activeTabId) {
+  const active = tabs.filter((t) => t.tabId === activeTabId);
+  return [...active, ...tabs.filter((t) => t.tabId !== activeTabId)];
+}
+
+function render(tabs, activeTabId) {
   const shared = tabs.filter((t) => t.shared).length;
   statusEl.textContent = shared > 0 ? `${shared} shared` : '';
 
@@ -16,16 +36,23 @@ function render(tabs) {
     return;
   }
 
-  tabsDiv.innerHTML = tabs
+  tabsDiv.innerHTML = activeFirst(tabs, activeTabId)
     .map(
       (t) => `
-    <div class="tab-item ${t.shared ? 'shared' : ''}">
+    <div class="tab-item ${t.shared ? 'shared' : ''} ${t.tabId === activeTabId ? 'active' : ''}">
       <div class="tab-info">
-        <div class="tab-title">${escapeHtml(t.title || 'Untitled')}</div>
+        <div class="tab-title">${t.tabId === activeTabId ? '<span class="this-tab">This tab</span>' : ''}${escapeHtml(t.title || 'Untitled')}</div>
         <div class="tab-meta">
           <span class="tab-id">#${t.tabId}</span>
           <span class="tab-url">${escapeHtml(t.url)}</span>
         </div>
+        ${t.handle ? `
+        <div class="tab-handle" data-handle="${escapeHtml(t.handle)}" data-tab-id="${t.tabId}" title="Give this to your agent; it is the only way to reach the tab">
+          \u{1F511} <code>${escapeHtml(t.handle)}</code>
+          ${t.tabId === copiedTabId
+            ? '<button class="copy-btn copied">Copied!</button>'
+            : '<button class="copy-btn">Copy</button>'}
+        </div>` : ''}
       </div>
       <button class="share-btn ${t.shared ? 'shared' : ''}"
               data-tab-id="${t.tabId}">
@@ -37,7 +64,18 @@ function render(tabs) {
     .join('');
 }
 
+function copyTabHandle(el) {
+  navigator.clipboard.writeText(el.dataset.handle)
+    .then(() => markCopied(parseInt(el.dataset.tabId, 10)));
+}
+
 tabsDiv.addEventListener('click', async (e) => {
+  const copyBtn = e.target.closest('.copy-btn');
+  if (copyBtn) {
+    copyTabHandle(copyBtn.closest('.tab-handle'));
+    return;
+  }
+
   const btn = e.target.closest('.share-btn');
   if (!btn || btn.disabled) return;
 
@@ -56,12 +94,18 @@ tabsDiv.addEventListener('click', async (e) => {
     alert('Error: ' + resp.error);
   }
 
-  loadTabs();
+  // Sharing already copied the tab handle to the clipboard; show that.
+  if (resp.ok && resp.copied) markCopied(tabId);
+  else loadTabs();
 });
 
 async function loadTabs() {
-  const resp = await chrome.runtime.sendMessage({ type: 'get_state' });
-  if (resp?.tabs) render(resp.tabs);
+  const [resp, [activeTab]] = await Promise.all([
+    chrome.runtime.sendMessage({ type: 'get_state' }),
+    chrome.tabs.query({ active: true, currentWindow: true }),
+  ]);
+  if (!resp?.tabs) return;
+  render(resp.tabs, activeTab?.id);
 }
 
 // Listen for state changes from background

@@ -1,32 +1,34 @@
 #!/usr/bin/env node
 // Tab Control — tab proxy (native messaging host)
-// Bridges Chrome extension ↔ Unix sockets for CLI/agent access.
+// Bridges Chrome extension ↔ a Unix socket for CLI/agent access.
 // Launched by Chrome via native messaging when the extension connects.
 //
 // Protocol:
 //   Extension ↔ Host: Chrome native messaging (4-byte LE length + JSON on stdin/stdout)
-//   CLI ↔ Host: NDJSON over Unix sockets (/tmp/chrome-tab-control/tab-<tabId>.sock)
+//   CLI ↔ Host: NDJSON over a Unix socket (~/.chrome-tab-control/sock/proxy-<pid>.sock)
 //
-// The host creates one Unix socket per shared tab. CLI clients connect to
-// these sockets and send raw CDP commands. The host forwards them to the
-// extension, which executes them via chrome.debugger.sendCommand().
+// Access control: shared tabs are never listed. The extension gives each shared
+// tab a random, secret tab handle; a client attaches to a tab by sending its
+// handle (ATTACH_METHOD) and only then can it send CDP commands or receive
+// events for that tab. The host forwards commands to the extension, which
+// executes them via chrome.debugger.sendCommand(). The socket directory is
+// private (0700).
 
 import net from 'net';
-import { writeFileSync, unlinkSync, chmodSync, mkdirSync } from 'fs';
-import { homedir } from 'os';
+import { createHash, timingSafeEqual } from 'crypto';
+import { unlinkSync, chmodSync, mkdirSync, lstatSync, readdirSync } from 'fs';
 import { resolve } from 'path';
+import {
+  configDir, sockDir, proxySocketPath, PROXY_SOCKET_RE,
+  PRIVATE_DIR_MODE, ATTACH_METHOD, AttachError, normalizeTabHandle,
+} from './protocol.mjs';
 
-const CONFIG_DIR = resolve(homedir(), '.chrome-tab-control');
-const SHARED_TABS_FILE = resolve(CONFIG_DIR, 'shared-tabs.json');
-const SOCK_DIR = '/tmp/chrome-tab-control';
-const SOCK_PREFIX = `${SOCK_DIR}/tab-`;
 const CDP_TIMEOUT = 15000;
-
-try { mkdirSync(CONFIG_DIR, { recursive: true }); } catch {}
-try { mkdirSync(SOCK_DIR, { recursive: true }); } catch {}
+const SOCKET_PATH = proxySocketPath(process.pid);
 
 // State
-const sharedTabs = new Map();   // tabId -> {url, title, server, socketPath, connections: Set}
+const sharedTabs = new Map();   // tabId -> {url, title, handle}
+const clients = new Map();      // conn -> {tabId: number | null}
 const pendingRequests = new Map(); // requestId -> {resolve, reject, timer}
 let requestCounter = 0;
 
@@ -68,6 +70,84 @@ function log(msg) {
 }
 
 // ---------------------------------------------------------------------------
+// Startup: private socket directory
+// ---------------------------------------------------------------------------
+
+// Creates dir with 0700 and refuses to use it unless it is a real directory
+// owned by this user, so no other account can plant or reach our socket.
+function ensurePrivateDir(dir) {
+  mkdirSync(dir, { recursive: true, mode: PRIVATE_DIR_MODE });
+  const st = lstatSync(dir);
+  if (!st.isDirectory() || st.isSymbolicLink()) throw new Error(`${dir} is not a directory`);
+  if (st.uid !== process.getuid()) throw new Error(`${dir} is not owned by the current user`);
+  chmodSync(dir, PRIVATE_DIR_MODE);
+}
+
+function isProcessAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (e) {
+    return e.code === 'EPERM';
+  }
+}
+
+// Sockets of proxies that died without cleanup (e.g. SIGKILL) would make every
+// CLI call try a dead endpoint, so remove them.
+function removeStaleSockets() {
+  for (const name of readdirSync(sockDir())) {
+    const pid = Number(name.match(PROXY_SOCKET_RE)?.[1]);
+    if (pid && pid !== process.pid && !isProcessAlive(pid)) {
+      try { unlinkSync(resolve(sockDir(), name)); } catch {}
+    }
+  }
+}
+
+try {
+  ensurePrivateDir(configDir());
+  ensurePrivateDir(sockDir());
+  removeStaleSockets();
+} catch (e) {
+  log(`Refusing to start: ${e.message}`);
+  process.exit(1);
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+function writeLine(conn, msg) {
+  conn.write(JSON.stringify(msg) + '\n');
+}
+
+// Hashing first gives equal-length buffers, as timingSafeEqual requires.
+function handleMatches(given, expected) {
+  const digest = (s) => createHash('sha256').update(s).digest();
+  return timingSafeEqual(digest(given), digest(expected));
+}
+
+// Checks every tab (no early exit) so timing does not reveal which tab matched.
+function findTabByHandle(handle) {
+  const given = normalizeTabHandle(handle);
+  let found = null;
+  for (const [tabId, tab] of sharedTabs) {
+    if (handleMatches(given, tab.handle) && found === null) found = tabId;
+  }
+  return found;
+}
+
+function clientsOf(tabId) {
+  return [...clients].filter(([, c]) => c.tabId === tabId).map(([conn]) => conn);
+}
+
+function disconnectClientsOf(tabId) {
+  for (const conn of clientsOf(tabId)) {
+    writeLine(conn, { event: '_tab_unshared' });
+    conn.end();
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Extension message handlers
 // ---------------------------------------------------------------------------
 
@@ -83,57 +163,21 @@ function handleExtensionMessage(msg) {
   }
 }
 
-function onTabShared({ tabId, url, title }) {
-  if (sharedTabs.has(tabId)) return; // already shared
-
-  const socketPath = `${SOCK_PREFIX}${tabId}.sock`;
-  try { unlinkSync(socketPath); } catch {}
-
-  const connections = new Set();
-  const server = net.createServer((conn) => {
-    connections.add(conn);
-    let buf = '';
-
-    conn.on('data', (chunk) => {
-      buf += chunk.toString();
-      const lines = buf.split('\n');
-      buf = lines.pop();
-      for (const line of lines) {
-        if (!line.trim()) continue;
-        let req;
-        try { req = JSON.parse(line); } catch {
-          conn.write(JSON.stringify({ id: null, ok: false, error: 'Invalid JSON' }) + '\n');
-          continue;
-        }
-        handleCliRequest(tabId, req, conn);
-      }
-    });
-
-    conn.on('error', () => {});
-    conn.on('close', () => { connections.delete(conn); });
-  });
-
-  server.listen(socketPath, () => {
-    try { chmodSync(socketPath, 0o600); } catch {}
-  });
-
-  sharedTabs.set(tabId, { url, title, server, socketPath, connections });
-  writeSharedTabsFile();
+function onTabShared({ tabId, url, title, handle }) {
+  if (!handle) {
+    log(`Ignoring share of tab ${tabId}: no tab handle`);
+    return;
+  }
+  const normalized = normalizeTabHandle(handle);
+  // Re-shared under a new handle: sessions attached with the old one end.
+  if (sharedTabs.get(tabId)?.handle !== normalized) disconnectClientsOf(tabId);
+  sharedTabs.set(tabId, { url, title, handle: normalized });
   log(`Tab shared: ${tabId} — ${url}`);
 }
 
 function onTabUnshared({ tabId }) {
-  const tab = sharedTabs.get(tabId);
-  if (!tab) return;
-
-  for (const conn of tab.connections) {
-    conn.write(JSON.stringify({ event: '_tab_unshared' }) + '\n');
-    conn.end();
-  }
-  tab.server.close();
-  try { unlinkSync(tab.socketPath); } catch {}
-  sharedTabs.delete(tabId);
-  writeSharedTabsFile();
+  if (!sharedTabs.delete(tabId)) return;
+  disconnectClientsOf(tabId);
   log(`Tab unshared: ${tabId}`);
 }
 
@@ -142,7 +186,6 @@ function onTabUpdated({ tabId, url, title }) {
   if (!tab) return;
   if (url) tab.url = url;
   if (title) tab.title = title;
-  writeSharedTabsFile();
 }
 
 function onCdpResponse({ requestId, result }) {
@@ -162,31 +205,53 @@ function onCdpError({ requestId, error }) {
 }
 
 function onCdpEvent({ tabId, method, params }) {
-  const tab = sharedTabs.get(tabId);
-  if (!tab) return;
-  const msg = JSON.stringify({ event: method, params }) + '\n';
-  for (const conn of tab.connections) {
-    try { conn.write(msg); } catch {}
+  for (const conn of clientsOf(tabId)) {
+    try { writeLine(conn, { event: method, params }); } catch {}
   }
 }
 
 // ---------------------------------------------------------------------------
-// CLI request handling
+// CLI socket
 // ---------------------------------------------------------------------------
 
-async function handleCliRequest(tabId, req, conn) {
+// Replies with an error and closes, so a rejected client cannot keep guessing
+// on the same connection.
+function rejectClient(conn, id, error) {
+  writeLine(conn, { id, ok: false, error });
+  conn.end();
+}
+
+function handleAttach(client, id, params, conn) {
+  const tabId = findTabByHandle(params?.handle);
+  if (tabId === null) {
+    log('Attach rejected: unknown tab handle');
+    return rejectClient(conn, id, AttachError.UNKNOWN);
+  }
+  client.tabId = tabId;
+  const { url, title } = sharedTabs.get(tabId);
+  writeLine(conn, { id, ok: true, result: { tabId, url, title } });
+}
+
+async function handleCliRequest(req, conn) {
   const { id, method, params } = req;
+  const client = clients.get(conn);
+  if (!client) return;
+
+  if (method === ATTACH_METHOD) return handleAttach(client, id, params, conn);
+  if (client.tabId === null || !sharedTabs.has(client.tabId)) {
+    return rejectClient(conn, id, AttachError.REQUIRED);
+  }
 
   if (!method) {
-    conn.write(JSON.stringify({ id, ok: false, error: 'Missing "method" field' }) + '\n');
+    writeLine(conn, { id, ok: false, error: 'Missing "method" field' });
     return;
   }
 
   try {
-    const result = await sendCdpCommand(tabId, method, params || {});
-    conn.write(JSON.stringify({ id, ok: true, result }) + '\n');
+    const result = await sendCdpCommand(client.tabId, method, params || {});
+    writeLine(conn, { id, ok: true, result });
   } catch (e) {
-    conn.write(JSON.stringify({ id, ok: false, error: e.message }) + '\n');
+    writeLine(conn, { id, ok: false, error: e.message });
   }
 }
 
@@ -202,31 +267,39 @@ function sendCdpCommand(tabId, method, params, timeout = CDP_TIMEOUT) {
   });
 }
 
-// ---------------------------------------------------------------------------
-// Shared tabs file
-// ---------------------------------------------------------------------------
+const server = net.createServer((conn) => {
+  clients.set(conn, { tabId: null });
+  let buf = '';
 
-function writeSharedTabsFile() {
-  const tabs = [];
-  for (const [tabId, info] of sharedTabs) {
-    tabs.push({ tabId, url: info.url, title: info.title, socketPath: info.socketPath });
-  }
-  try {
-    writeFileSync(SHARED_TABS_FILE, JSON.stringify(tabs, null, 2));
-  } catch (e) {
-    log(`Failed to write shared tabs file: ${e.message}`);
-  }
-}
+  conn.on('data', (chunk) => {
+    buf += chunk.toString();
+    const lines = buf.split('\n');
+    buf = lines.pop();
+    for (const line of lines) {
+      if (conn.writableEnded) return; // rejected earlier in this chunk
+      if (!line.trim()) continue;
+      let req;
+      try { req = JSON.parse(line); } catch {
+        writeLine(conn, { id: null, ok: false, error: 'Invalid JSON' });
+        continue;
+      }
+      handleCliRequest(req, conn);
+    }
+  });
+
+  conn.on('error', () => {});
+  conn.on('close', () => { clients.delete(conn); });
+});
+
+try { unlinkSync(SOCKET_PATH); } catch {}
+server.listen(SOCKET_PATH, () => {
+  try { chmodSync(SOCKET_PATH, 0o600); } catch {}
+});
 
 function cleanup() {
-  for (const [tabId, tab] of sharedTabs) {
-    for (const conn of tab.connections) { try { conn.end(); } catch {} }
-    tab.server.close();
-    try { unlinkSync(tab.socketPath); } catch {}
-  }
-  sharedTabs.clear();
-  // Write empty file so CLI knows no tabs are shared
-  try { writeFileSync(SHARED_TABS_FILE, '[]'); } catch {}
+  for (const conn of clients.keys()) { try { conn.end(); } catch {} }
+  server.close();
+  try { unlinkSync(SOCKET_PATH); } catch {}
   log('Cleaned up');
 }
 

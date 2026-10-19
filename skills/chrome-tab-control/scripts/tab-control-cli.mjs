@@ -2,35 +2,19 @@
 // tab-control — CLI for interacting with shared Chrome tabs
 // Works with the CDP Tab Control Chrome extension. No --remote-debugging-port needed.
 //
-// Usage: tab-control <command> [args]
-//   list                              List shared tabs
-//   snap  <tabId>                     Accessibility tree snapshot
-//   eval  <tabId> <expr>              Evaluate JS expression
-//   shot  <tabId> [file]              Screenshot (default: /tmp/screenshot.png)
-//   shot  <tabId> [file] --highlight <sel>  Screenshot with highlighted elements
-//   html  <tabId> [selector]          Get HTML (full page or element)
-//   nav   <tabId> <url>               Navigate and wait for load (same-host only)
-//   nav   <tabId> <url> --watch [s]  Navigate with console+network monitoring
-//   nav   <tabId> <url> --cross-origin  Allow navigation to a different host
-//   refresh <tabId> [--hard]          Reload current URL (no host change)
-//   net   <tabId>                     Network performance entries
-//   click   <tabId> <selector>        Click element by CSS selector
-//   clickxy <tabId> <x> <y>           Click at CSS pixel coordinates
-//   type    <tabId> <text>            Type text at current focus
-//   loadall <tabId> <selector> [ms]   Click until element disappears
-//   evalraw <tabId> <method> [json]   Raw CDP command
-//
-// Shared tabs are managed via the Tab Control Chrome extension popup.
+// Usage: tab-control <command> <tab> [args]
+//   <tab> is the tab handle the user gave you (e.g. K7QM-4XRT-AB12). Shared tabs
+//   are never listed; the handle, copied to the user's clipboard when they share
+//   a tab, is the only way to reach one. Run with --help for commands.
 
 import net from 'net';
-import { readFileSync, writeFileSync, existsSync } from 'fs';
-import { homedir } from 'os';
+import { writeFileSync, readdirSync } from 'fs';
 import { resolve } from 'path';
 import { fileURLToPath } from 'url';
+import {
+  sockDir, PROXY_SOCKET_RE, ATTACH_METHOD, normalizeTabHandle, TAB_HANDLE_RE,
+} from './protocol.mjs';
 
-const CONFIG_DIR = resolve(homedir(), '.chrome-tab-control');
-const SHARED_TABS_FILE = resolve(CONFIG_DIR, 'shared-tabs.json');
-const SOCK_PREFIX = '/tmp/chrome-tab-control/tab-';
 const TIMEOUT = 15000;
 const NAVIGATION_TIMEOUT = 30000;
 
@@ -1187,21 +1171,36 @@ async function evalRawStr(cdp, method, paramsJson) {
 // Tab resolution
 // ---------------------------------------------------------------------------
 
-function loadSharedTabs() {
-  if (!existsSync(SHARED_TABS_FILE)) return [];
-  try {
-    return JSON.parse(readFileSync(SHARED_TABS_FILE, 'utf8'));
-  } catch {
-    return [];
-  }
+const HANDLE_HINT = 'Ask the user to paste the tab handle (sharing copies it; the Tab Control popup also shows it; looks like K7QM-4XRT-AB12).';
+
+const listDisabledMessage = () => `Listing shared tabs is disabled: each shared tab is reached only by its tab handle.
+${HANDLE_HINT}
+Then run e.g.: tab-control info <tab-handle>`;
+
+function proxySockets() {
+  let names = [];
+  try { names = readdirSync(sockDir()); } catch {}
+  return names.filter((n) => PROXY_SOCKET_RE.test(n)).map((n) => resolve(sockDir(), n));
 }
 
-function resolveTabId(prefix, tabs) {
-  const p = String(prefix);
-  const matches = tabs.filter((t) => String(t.tabId).startsWith(p));
-  if (matches.length === 0) throw new Error(`No shared tab matching "${prefix}". Run "tab-control list".`);
-  if (matches.length > 1) throw new Error(`Ambiguous prefix "${prefix}" — matches ${matches.length} tabs. Use more digits.`);
-  return matches[0].tabId;
+// Tries the handle against every running proxy (one per Chrome profile). The
+// proxy sharing that tab accepts it; the others reject it and close.
+// Returns {cdp, tab: {tabId, url, title}}.
+async function attachToTab(handle) {
+  const sockets = proxySockets();
+  if (sockets.length === 0) {
+    throw new Error('Tab Control is not running. Ask the user to open Chrome with the Tab Control extension and share the tab.');
+  }
+  for (const path of sockets) {
+    const cdp = new CdpSocket();
+    try { await cdp.connect(path); } catch { continue; }
+    try {
+      return { cdp, tab: await cdp.send(ATTACH_METHOD, { handle }) };
+    } catch {
+      cdp.close();
+    }
+  }
+  throw new Error(`No shared tab has the handle "${handle}" (it may have been unshared). ${HANDLE_HINT}`);
 }
 
 // ---------------------------------------------------------------------------
@@ -1212,7 +1211,7 @@ const USAGE = `tab-control — interact with shared Chrome tabs (no --remote-deb
 
 Usage: tab-control <command> [args]
 
-  list                              List shared tabs (with connection status)
+  info  <tab>                       Show the tab's title and URL (check you have the right tab)
   snap  <tab>                       Accessibility tree snapshot
   eval  <tab> <expr>                Evaluate JS expression
   shot  <tab> [file]                Screenshot (default: /tmp/screenshot.png)
@@ -1244,13 +1243,15 @@ Usage: tab-control <command> [args]
   annotations <tab>                 List user-drawn annotations with page context
   pins <tab>                        List user-pinned elements (from Select)
 
-<tab> is a tab ID from "tab-control list" (or a unique prefix).
+<tab> is the tab handle the user gave you, e.g. K7QM-4XRT-AB12. Shared tabs
+cannot be listed: the handle (copied to the clipboard when the user shares a
+tab) is the only way to reach one. Treat it as a secret.
 
 SETUP
   1. Load the Chrome extension from the extension/ directory
   2. Run: make install-tab-proxy
-  3. Click the extension icon and "Share" the tabs you want to expose
-  4. Use this CLI or let your AI agent use it
+  3. Click the extension icon and "Share" the tab you want to expose
+  4. Paste the tab handle (sharing copied it) to your AI agent
 
 COORDINATES
   shot saves at native resolution. CDP Input events use CSS pixels.
@@ -1258,7 +1259,7 @@ COORDINATES
 `;
 
 const NEEDS_TAB = new Set([
-  'snap', 'snapshot', 'eval', 'shot', 'screenshot', 'html', 'nav', 'navigate',
+  'info', 'snap', 'snapshot', 'eval', 'shot', 'screenshot', 'html', 'nav', 'navigate',
   'refresh', 'reload',
   'net', 'network', 'console', 'requests', 'watch',
   'click', 'clickxy', 'type', 'loadall', 'evalraw', 'annotations', 'pins',
@@ -1273,28 +1274,9 @@ async function main() {
     process.exit(0);
   }
 
-  // List shared tabs
   if (cmd === 'list' || cmd === 'ls') {
-    const tabs = loadSharedTabs();
-    if (tabs.length === 0) {
-      console.log(`No shared tabs.
-
-To share a tab:
-  1. Click the Tab Control extension icon (puzzle piece → Tab Control) in Chrome
-  2. Click "Share" next to the tab you want to expose
-  3. A yellow "debugging this tab" bar confirms sharing is active
-  4. Re-run this command to see the shared tab`);
-      return;
-    }
-    const idWidth = Math.max(...tabs.map((t) => String(t.tabId).length));
-    for (const t of tabs) {
-      const id = String(t.tabId).padEnd(idWidth);
-      const socketOk = existsSync(`${SOCK_PREFIX}${t.tabId}.sock`);
-      const status = socketOk ? '\u{1F7E1}' : '\u26AA';
-      const title = (t.title || '').substring(0, 54).padEnd(54);
-      console.log(`${id}  ${status} ${title}  ${t.url}`);
-    }
-    return;
+    console.error(listDisabledMessage());
+    process.exit(1);
   }
 
   if (!NEEDS_TAB.has(cmd)) {
@@ -1303,26 +1285,21 @@ To share a tab:
     process.exit(1);
   }
 
-  const tabPrefix = args[0];
-  if (!tabPrefix) {
-    console.error('Error: tab ID required. Run "tab-control list" first.');
+  const handle = normalizeTabHandle(args[0]);
+  if (!handle) {
+    console.error(`Error: tab handle required. ${HANDLE_HINT}`);
+    process.exit(1);
+  }
+  if (!TAB_HANDLE_RE.test(handle)) {
+    console.error(`Error: "${args[0]}" is not a tab handle. ${HANDLE_HINT}`);
     process.exit(1);
   }
 
-  const tabs = loadSharedTabs();
-  const tabId = resolveTabId(tabPrefix, tabs);
-  const socketPath = `${SOCK_PREFIX}${tabId}.sock`;
-
-  if (!existsSync(socketPath)) {
-    console.error(`Socket not found for tab ${tabId}. Is the extension running?`);
-    process.exit(1);
-  }
-
-  const cdp = new CdpSocket();
+  let cdp, tab;
   try {
-    await cdp.connect(socketPath);
+    ({ cdp, tab } = await attachToTab(handle));
   } catch (e) {
-    console.error(`Cannot connect to tab ${tabId}: ${e.message}`);
+    console.error(`Error: ${e.message}`);
     process.exit(1);
   }
 
@@ -1331,6 +1308,7 @@ To share a tab:
   try {
     let result;
     switch (cmd) {
+      case 'info': result = `Title: ${tab.title || ''}\nURL:   ${tab.url || ''}`; break;
       case 'snap': case 'snapshot': result = await snapshotStr(cdp); break;
       case 'annotations': result = await annotationsStr(cdp); break;
       case 'pins': result = await picksStr(cdp); break;

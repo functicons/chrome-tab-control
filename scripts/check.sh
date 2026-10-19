@@ -51,12 +51,12 @@ else
   check_warn "Claude Code skill not installed (run: make install-skill)"
 fi
 
-# Shared tabs
-TABS="${HOME}/.chrome-tab-control/shared-tabs.json"
-if [ -f "${TABS}" ] && [ "$(cat "${TABS}" 2>/dev/null)" != "[]" ] && [ -s "${TABS}" ]; then
-  check_pass "Shared tabs found"
+# Running tab proxy (shared tabs themselves are never listed)
+SOCK_DIR="${HOME}/.chrome-tab-control/sock"
+if ls "${SOCK_DIR}"/proxy-*.sock >/dev/null 2>&1; then
+  check_pass "Tab proxy running"
 else
-  check_warn "No shared tabs (open the Tab Control extension and share a tab)"
+  check_warn "Tab proxy not running (open Chrome and share a tab with the Tab Control extension)"
 fi
 
 echo ""

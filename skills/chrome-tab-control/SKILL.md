@@ -14,21 +14,33 @@ Control Chrome tabs that the user has explicitly shared via the Tab Control exte
 
 ## How It Works
 
-1. User clicks the Tab Control extension icon in Chrome
-2. User clicks "Share" next to the tab(s) they want to expose
-3. A yellow debugging bar appears on shared tabs (confirms sharing is active)
-4. This CLI can now interact with those tabs
-5. User clicks "Unshare" when done — the debugging bar disappears
+1. User clicks the Tab Control extension icon in Chrome (or right-clicks the page)
+2. User clicks "Share" next to the tab they want to expose
+3. The extension creates a random **tab handle** for that tab, e.g. `K7QM-4XRT-AB12`, and copies it to the user's clipboard; the user pastes it to you
+4. You pass the handle wherever a command takes `<tab>`
+5. User clicks "Unshare" when done — the handle stops working
+
+Shared tabs are **never listed**: there is no way to discover them. The tab handle is the only way to reach a tab, and the user decides who gets it.
 
 ## Commands
 
-All commands use `scripts/tab-control-cli.mjs`. The `<tab>` argument is a tab ID from `list` (or a unique prefix).
+All commands use `scripts/tab-control-cli.mjs`. The `<tab>` argument is the tab handle the user gave you.
 
-### List shared tabs
+### Get the tab handle
+
+If the user has not given you a tab handle, ask: *"Please share the tab with Tab Control and paste me its tab handle (sharing copies it to your clipboard; the extension popup also shows it)."* Do not guess one, and do not look for a way to list tabs (`list` is disabled on purpose).
+
+Never read the clipboard yourself to get the handle (no `pbpaste`, `osascript`, `xclip` or similar), even though sharing copies it there: the clipboard may hold unrelated private data. Wait for the user to paste it to you.
+
+Treat the handle as a secret: do not write it to files, commits or logs.
+
+### Check you have the right tab
 
 ```bash
-scripts/tab-control-cli.mjs list
+scripts/tab-control-cli.mjs info <tab>    # prints the tab's title and URL
 ```
+
+If a command reports `No shared tab has the handle`, the tab was unshared or the handle is wrong: ask the user for the current one.
 
 ### Take a screenshot
 
@@ -183,8 +195,8 @@ CSS px = screenshot image px / DPR
 
 ## Tips
 
-- Run `list` first to see which tabs the user has shared.
-- If no tabs are shared, ask the user to open the Tab Control extension and share a tab.
+- Run `info <tab>` first to confirm the handle points at the page the user means.
+- If you have no tab handle, ask the user to share the tab and send you its handle.
 - The yellow "debugging this tab" bar is expected — it confirms the tab is shared.
 - Prefer `snap` over `html` for understanding page structure.
 - Use `type` (not eval) to enter text in cross-origin iframes.

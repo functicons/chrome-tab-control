@@ -4,8 +4,54 @@
 const NATIVE_HOST = 'com.functicons.chrome_tab_control';
 
 let nativePort = null;
-const sharedTabs = new Map(); // tabId -> {url, title}
+const sharedTabs = new Map(); // tabId -> {url, title, handle}
 const annotatingTabs = new Set(); // tabId
+
+// ---------------------------------------------------------------------------
+// Tab handles — the secret, random id an agent uses to reach a shared tab.
+// Shared tabs are never listed, so the handle is the only way in.
+// ---------------------------------------------------------------------------
+
+// Crockford base32 (no I, L, O, U): 32 symbols, so `byte & 31` is unbiased.
+const TAB_HANDLE_ALPHABET = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
+const TAB_HANDLE_LENGTH = 12; // 60 bits: infeasible to guess, so no lockout is needed
+const TAB_HANDLE_GROUP = 4;
+
+function generateTabHandle() {
+  const bytes = crypto.getRandomValues(new Uint8Array(TAB_HANDLE_LENGTH));
+  const chars = Array.from(bytes, (b) => TAB_HANDLE_ALPHABET[b & 31]).join('');
+  return chars.match(new RegExp(`.{${TAB_HANDLE_GROUP}}`, 'g')).join('-');
+}
+
+// ---------------------------------------------------------------------------
+// Clipboard — via an offscreen document, since a service worker has no DOM
+// ---------------------------------------------------------------------------
+
+const OFFSCREEN_URL = 'offscreen.html';
+let offscreenCreating = null; // in-flight createDocument, so concurrent copies share it
+
+async function ensureOffscreenDocument() {
+  if (await chrome.offscreen.hasDocument()) return;
+  offscreenCreating ??= chrome.offscreen.createDocument({
+    url: OFFSCREEN_URL,
+    reasons: ['CLIPBOARD'],
+    justification: 'Copy the tab handle to the clipboard when the user shares a tab',
+  }).finally(() => { offscreenCreating = null; });
+  await offscreenCreating;
+}
+
+// Returns whether the text reached the clipboard; never throws, because a
+// failed copy must not fail the share (the popup still offers a Copy button).
+async function copyToClipboard(text) {
+  try {
+    await ensureOffscreenDocument();
+    const resp = await chrome.runtime.sendMessage({ target: 'offscreen', type: 'copy', text });
+    return Boolean(resp?.ok);
+  } catch (e) {
+    console.warn('Tab Control: copying the tab handle failed:', e.message);
+    return false;
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Tab context menu (right-click on tab)
@@ -118,10 +164,12 @@ function ensureNativePort() {
     nativePort = null;
   });
 
-  // Send current shared tabs state so native host can recreate sockets
+  // Re-send shared tabs and their handles so a restarted proxy can route to them
   if (sharedTabs.size > 0) {
     for (const [tabId, info] of sharedTabs) {
-      nativePort.postMessage({ type: 'tab_shared', tabId, url: info.url, title: info.title });
+      nativePort.postMessage({
+        type: 'tab_shared', tabId, url: info.url, title: info.title, handle: info.handle,
+      });
     }
   }
 
@@ -373,14 +421,17 @@ async function shareTab(tabId) {
   if (reason) throw new Error(reason);
   await chrome.debugger.attach({ tabId }, '1.3');
 
-  sharedTabs.set(tabId, { url: tab.url, title: tab.title });
+  const handle = generateTabHandle();
+  sharedTabs.set(tabId, { url: tab.url, title: tab.title, handle });
 
   await injectConsoleHistory(tabId);
 
   const port = ensureNativePort();
-  port.postMessage({ type: 'tab_shared', tabId, url: tab.url, title: tab.title });
+  port.postMessage({ type: 'tab_shared', tabId, url: tab.url, title: tab.title, handle });
   await addTitlePrefix(tabId);
+  const copied = await copyToClipboard(handle);
   broadcastState();
+  return { copied };
 }
 
 async function unshareTab(tabId) {
@@ -552,6 +603,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           url: t.url,
           title: t.title,
           shared: sharedTabs.has(t.id),
+          handle: sharedTabs.get(t.id)?.handle || null,
           annotating: annotatingTabs.has(t.id),
         }));
       sendResponse({ tabs: tabList });
@@ -561,7 +613,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 
   if (msg.type === 'share') {
     shareTab(msg.tabId)
-      .then(() => sendResponse({ ok: true }))
+      .then(({ copied }) => sendResponse({ ok: true, copied }))
       .catch((e) => sendResponse({ ok: false, error: e.message }));
     return true;
   }

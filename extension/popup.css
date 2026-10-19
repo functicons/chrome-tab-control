@@ -44,6 +44,53 @@ h1 {
 
 .screenshot-btn:hover { background: #f0f0f0; }
 
+.tab-handle {
+  display: inline-block;
+  margin-top: 4px;
+  font-size: 11px;
+  border-radius: 3px;
+}
+
+.tab-handle code {
+  font-family: 'SF Mono', Monaco, Consolas, monospace;
+  font-size: 12px;
+  font-weight: 600;
+  color: #1a73e8;
+  letter-spacing: 0.5px;
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: #e8f0fe;
+}
+
+.copy-btn {
+  margin-left: 4px;
+  padding: 1px 8px;
+  border: 1px solid #c6dafc;
+  border-radius: 4px;
+  background: #fff;
+  color: #1a73e8;
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.copy-btn:hover { background: #e8f0fe; }
+.copy-btn.copied { background: #1a73e8; border-color: #1a73e8; color: #fff; }
+
+.tab-item.active { border-left: 3px solid #1a73e8; padding-left: 11px; }
+
+.this-tab {
+  display: inline-block;
+  margin-right: 6px;
+  padding: 0 5px;
+  border-radius: 3px;
+  background: #1a73e8;
+  color: #fff;
+  font-size: 10px;
+  font-weight: 600;
+  vertical-align: 1px;
+}
+
 .tab-item {
   display: flex;
   align-items: center;

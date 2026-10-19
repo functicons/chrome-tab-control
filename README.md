@@ -7,6 +7,7 @@ A Chrome extension + CLI + AI skill that lets you selectively share browser tabs
 ## ✨ Features
 
 - 🔒 **Per-tab access control** — only explicitly shared tabs are accessible
+- 🔑 **Secret tab handles** — shared tabs are never listed; each gets a random handle, and only agents you give it to can reach the tab
 - 📸 **Screenshots** — capture viewport with coordinate mapping
 - 🌳 **Accessibility tree** — structured page snapshot for AI understanding
 - ⌨️ **Interaction** — click elements, type text, navigate pages
@@ -89,8 +90,8 @@ No debug port, no new tabs, no describing things in words — just point at your
 
 1. 👤 **User** shares a tab (extension popup or right-click)
 2. 🔗 **Extension** attaches `chrome.debugger` to that tab
-3. 🔌 **Tab proxy** creates a Unix socket for the tab
-4. 🤖 **AI agent** reads the skill, discovers shared tabs, and runs CLI commands
+3. 🔑 **Extension** generates a random tab handle (e.g. `K7QM-4XRT-AB12`) and copies it to your clipboard
+4. 🤖 **AI agent** gets the handle when you paste it, attaches to the tab through the tab proxy's Unix socket, and runs CLI commands
 5. ✅ Results flow back through the same chain
 
 ## 📦 Setup
@@ -134,6 +135,17 @@ Two ways to share a tab:
 2. Right-click anywhere on the page → **Share Tab**
 
 The tab title will show a flashing ⚪🟡 indicator confirming it's shared.
+
+### Give the tab handle to your agent
+
+Shared tabs are never listed. Each shared tab gets a random **tab handle** such as `K7QM-4XRT-AB12`, and the handle is the only way to reach it:
+
+- Sharing copies the handle to your clipboard (from the popup or the right-click menu), so you can paste it straight to your agent. The popup also lists it under the tab with a **Copy** button (the current tab is pinned to the top).
+- Tell your agent the handle, e.g. *"use tab K7QM-4XRT-AB12"*. It uses the handle wherever a command takes `<tab>`: `tc snap K7QM-4XRT-AB12`. `tc info <tab>` prints the tab's title and URL, so the agent can check it has the right tab.
+- The agent skill never reads your clipboard to find the handle, because the clipboard may hold unrelated private data. You paste it yourself.
+- Unsharing retires the handle. Sharing the tab again creates a new one.
+
+The handle lives only in the memory of the extension and the tab proxy; Chrome Tab Control never writes it to disk. It has 60 random bits, so it cannot practically be guessed. It keeps out every process you did not give it to, including other agent sessions. It does not stop malware already running as your user, which could read the handle wherever you paste it (e.g. an agent's session log).
 
 ### Annotate a tab
 
@@ -213,7 +225,7 @@ Capture a selected area of any tab as a PNG image.
 
 ### 🤖 Use with AI agents (Claude Code)
 
-Once the skill is installed (`make install-skill`), share a tab and ask Claude Code to work with it. Examples:
+Once the skill is installed (`make install-skill`), share a tab and give Claude Code its tab handle along with what you want. Examples:
 
 ```
 "Summarize the page I'm looking at"
@@ -225,7 +237,7 @@ Once the skill is installed (`make install-skill`), share a tab and ask Claude C
 "What API calls is this page making?"
 ```
 
-Claude Code will automatically discover shared tabs and use the CLI to interact with them.
+Claude Code will use the handle with the CLI to interact with the tab. If you forget the handle, it will ask for it.
 
 ### CLI commands
 
@@ -233,8 +245,9 @@ Claude Code will automatically discover shared tabs and use the CLI to interact 
 # Alias for convenience
 alias tc='node skills/chrome-tab-control/scripts/tab-control-cli.mjs'
 
-# List shared tabs
-tc list
+# <tab> is the tab handle (copied to your clipboard when you share), e.g. K7QM-4XRT-AB12
+# Show the tab's title and URL
+tc info <tab>
 
 # Take a screenshot
 tc shot <tab>              # saves to /tmp/screenshot.png
@@ -349,6 +362,7 @@ chrome-tab-control/
 │   ├── manifest.json
 │   ├── background.js
 │   ├── popup.html / popup.css / popup.js
+│   ├── offscreen.html / offscreen.js       # Hidden page that copies the tab handle to the clipboard
 │   ├── annotate.js                        # Annotation overlay (injected on demand)
 │   ├── screenshot-select.js               # Screenshot area selector (injected on demand)
 │   └── icons/
@@ -358,12 +372,14 @@ chrome-tab-control/
 │   ├── check.sh                        # Verify dependencies
 │   └── gen-icons.mjs                   # Icon generator
 ├── tests/                              # Unit tests (node --test, no deps)
-│   └── cli.test.mjs
+│   ├── cli.test.mjs
+│   └── proxy.test.mjs                  # Proxy access control (spawns the real proxy)
 └── skills/chrome-tab-control/          # Skill directory (what AI agents use)
     ├── SKILL.md                        # Skill manifest
     └── scripts/
         ├── tab-control-cli.mjs         # CLI tool (all commands)
         ├── tab-proxy.mjs             # Tab proxy (native messaging bridge)
+        ├── protocol.mjs              # Paths and auth constants shared by CLI and proxy
         └── tab-proxy-wrapper.sh      # Node.js path resolver for nvm/volta/fnm
 ```
 
@@ -371,12 +387,12 @@ chrome-tab-control/
 
 **CLI → Agent:** Unix socket (NDJSON) → tab-proxy.mjs → stdin/stdout (native messaging) → extension → `chrome.debugger.sendCommand()` → Chrome
 
-**Chrome → CLI (events):** Chrome → `chrome.debugger.onEvent` → extension → native messaging → tab-proxy.mjs → broadcasts to all connected sockets
+**Chrome → CLI (events):** Chrome → `chrome.debugger.onEvent` → extension → native messaging → tab-proxy.mjs → sends to the sockets attached to that tab
 
 ### Key design decisions
 
 - **No `--remote-debugging-port`** — the extension uses `chrome.debugger` API, which is scoped to individual tabs
-- **Per-tab Unix sockets** — each shared tab gets its own socket at `/tmp/chrome-tab-control/tab-<tabId>.sock`
+- **Tab handles instead of tab IDs** — the tab proxy listens on one socket, `~/.chrome-tab-control/sock/proxy-<pid>.sock` (one proxy per Chrome profile). A client attaches to a tab by sending its handle, and the CLI tries each proxy socket until one accepts it. Nothing lists the shared tabs
 - **Zero dependencies** — pure Node.js 22+, no npm install needed
 - **Tab proxy** acts as a reverse proxy between CLI clients and the Chrome extension
 
@@ -394,7 +410,8 @@ The `shot` command prints the DPR and conversion formula. For Retina displays (D
 
 - Only tabs explicitly shared by the user are accessible
 - CDP commands are validated against the shared tabs list
-- Unix sockets are `chmod 600` (owner-only)
+- Shared tabs are never listed. A client must attach with the tab's secret handle (see [Give the tab handle to your agent](#give-the-tab-handle-to-your-agent)) before it gets any command results or CDP events, and only for that tab
+- Unix sockets are `chmod 600` inside `~/.chrome-tab-control/sock/`, which is `0700` and must be a real directory owned by you (the proxy refuses to start otherwise), so other accounts cannot reach or plant sockets
 - Extension requires explicit user action to share each tab
 
 ## 📄 License
