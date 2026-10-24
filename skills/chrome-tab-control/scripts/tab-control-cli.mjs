@@ -8,14 +8,18 @@
 //   a tab, is the only way to reach one. Run with --help for commands.
 
 import net from 'net';
-import { writeFileSync, readdirSync } from 'fs';
+import { writeFileSync, readdirSync, realpathSync } from 'fs';
 import { resolve } from 'path';
 import { fileURLToPath } from 'url';
 import {
-  sockDir, PROXY_SOCKET_RE, ATTACH_METHOD, normalizeTabHandle, TAB_HANDLE_RE,
+  sockDir, PROXY_SOCKET_RE, REMOTE_SOCKET_RE, ATTACH_METHOD, AttachError,
+  normalizeTabHandle, TAB_HANDLE_RE,
 } from './protocol.mjs';
+import { remoteCommand } from './remote-link.mjs';
 
 const TIMEOUT = 15000;
+// Sent by the proxy just before it ends a session on purpose (see tab-proxy.mjs).
+const TAB_REVOKED_EVENT = '_tab_unshared';
 const NAVIGATION_TIMEOUT = 30000;
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -30,6 +34,15 @@ class CdpSocket {
   #pending = new Map();
   #eventHandlers = new Map();
   #buf = '';
+  #markClosed;
+  #isClosed = false;
+  #revoked = false;
+  // Resolves when the connection ends, for any reason; see revoked.
+  closed = new Promise((r) => { this.#markClosed = r; });
+
+  // True when the proxy ended the session on purpose: the tab was unshared,
+  // or (for a client on a remote host) its remote access was turned off.
+  get revoked() { return this.#revoked; }
 
   connect(socketPath) {
     return new Promise((resolve, reject) => {
@@ -38,6 +51,8 @@ class CdpSocket {
       this.#conn.on('error', reject);
       this.#conn.on('data', (chunk) => this.#onData(chunk));
       this.#conn.on('close', () => {
+        this.#isClosed = true;
+        this.#markClosed();
         for (const { reject } of this.#pending.values()) {
           reject(new Error('Connection closed'));
         }
@@ -56,6 +71,7 @@ class CdpSocket {
 
       // CDP event from native host
       if (msg.event) {
+        if (msg.event === TAB_REVOKED_EVENT) this.#revoked = true;
         const handlers = this.#eventHandlers.get(msg.event);
         if (handlers) {
           for (const h of [...handlers]) h(msg.params || {});
@@ -74,6 +90,7 @@ class CdpSocket {
   }
 
   send(method, params = {}, timeout = TIMEOUT) {
+    if (this.#isClosed) return Promise.reject(new Error('Connection closed'));
     const id = ++this.#idCounter;
     return new Promise((resolve, reject) => {
       this.#pending.set(id, { resolve, reject });
@@ -126,6 +143,18 @@ class CdpSocket {
 // ---------------------------------------------------------------------------
 // Command implementations
 // ---------------------------------------------------------------------------
+
+const DISCONNECTED_REVOKED = 'Disconnected from the tab: it was unshared, or its remote access was turned off.';
+const DISCONNECTED_LOST = 'Lost the connection to the tab (Chrome, the tab proxy, or the remote link went away).';
+
+// Waits out a monitoring window, but fails at once if the session ends, so a
+// monitor never keeps reporting "0 events" from a tab it can no longer see.
+async function monitorFor(cdp, ms) {
+  const ended = cdp.closed.then(() => {
+    throw new Error(cdp.revoked ? DISCONNECTED_REVOKED : DISCONNECTED_LOST);
+  });
+  await Promise.race([sleep(ms), ended]);
+}
 
 function shouldShowAxNode(node, compact = false) {
   const role = node.role?.value || '';
@@ -497,7 +526,7 @@ async function navWatchStr(cdp, url, postLoadSec = 2) {
 
   // Continue monitoring for a bit after load to catch post-load errors
   console.error(`Page loaded. Monitoring for ${postLoadSec}s more...`);
-  await sleep(postLoadSec * 1000);
+  await monitorFor(cdp, postLoadSec * 1000);
 
   if (count === 0) return `Navigated to ${url}\nNo console/network events captured.`;
   return `Navigated to ${url}\n${count} event(s) captured.`;
@@ -1044,7 +1073,7 @@ async function consoleStr(cdp, durationSec = 5) {
   });
 
   console.error(`Monitoring console for ${durationSec}s... (Ctrl+C to stop early)`);
-  await sleep(durationSec * 1000);
+  await monitorFor(cdp, durationSec * 1000);
 
   if (messages.length === 0) return 'No console messages captured.';
   return `\n${messages.length} message(s) captured.`;
@@ -1093,7 +1122,7 @@ async function requestsStr(cdp, durationSec = 5) {
   });
 
   console.error(`Monitoring network for ${durationSec}s... (Ctrl+C to stop early)`);
-  await sleep(durationSec * 1000);
+  await monitorFor(cdp, durationSec * 1000);
 
   if (completed.length === 0 && pending.size === 0) return 'No network requests captured.';
   return `\n${completed.length} completed, ${pending.size} still pending.`;
@@ -1151,7 +1180,7 @@ async function watchStr(cdp, durationSec = 10) {
   });
 
   console.error(`Watching console + network for ${durationSec}s... (Ctrl+C to stop early)`);
-  await sleep(durationSec * 1000);
+  await monitorFor(cdp, durationSec * 1000);
 
   return `\n${count} event(s) captured.`;
 }
@@ -1177,29 +1206,39 @@ const listDisabledMessage = () => `Listing shared tabs is disabled: each shared 
 ${HANDLE_HINT}
 Then run e.g.: tab-control info <tab-handle>`;
 
-function proxySockets() {
+// Local proxies (one per Chrome profile) and remote links from Chrome on other
+// machines (see remote-link.mjs).
+function tabEndpoints() {
   let names = [];
   try { names = readdirSync(sockDir()); } catch {}
-  return names.filter((n) => PROXY_SOCKET_RE.test(n)).map((n) => resolve(sockDir(), n));
+  return names
+    .filter((n) => PROXY_SOCKET_RE.test(n) || REMOTE_SOCKET_RE.test(n))
+    .map((n) => resolve(sockDir(), n));
 }
 
-// Tries the handle against every running proxy (one per Chrome profile). The
-// proxy sharing that tab accepts it; the others reject it and close.
-// Returns {cdp, tab: {tabId, url, title}}.
+const NOT_RUNNING = 'Tab Control is not running. Ask the user to open Chrome with the Tab Control extension and share the tab.'
+  + ' If Chrome runs on another machine, the user links it to this host by running `tab-control remote <this-host>` there.';
+
+// Tries the handle against every endpoint. The one reaching the tab accepts
+// it; the others reject it and close. Returns {cdp, tab: {tabId, url, title}}.
 async function attachToTab(handle) {
-  const sockets = proxySockets();
-  if (sockets.length === 0) {
-    throw new Error('Tab Control is not running. Ask the user to open Chrome with the Tab Control extension and share the tab.');
-  }
-  for (const path of sockets) {
+  let reachable = 0;
+  let remoteDisabled = false;
+  for (const path of tabEndpoints()) {
     const cdp = new CdpSocket();
     try { await cdp.connect(path); } catch { continue; }
+    reachable++;
     try {
       return { cdp, tab: await cdp.send(ATTACH_METHOD, { handle }) };
-    } catch {
+    } catch (e) {
+      if (e.message === AttachError.REMOTE_DISABLED) remoteDisabled = true;
       cdp.close();
     }
   }
+  if (remoteDisabled) {
+    throw new Error(`Remote access is off for tab "${handle}". Ask the user to turn on "Remote" for that tab in the Tab Control popup.`);
+  }
+  if (reachable === 0) throw new Error(NOT_RUNNING);
   throw new Error(`No shared tab has the handle "${handle}" (it may have been unshared). ${HANDLE_HINT}`);
 }
 
@@ -1243,6 +1282,10 @@ Usage: tab-control <command> [args]
   annotations <tab>                 List user-drawn annotations with page context
   pins <tab>                        List user-pinned elements (from Select)
 
+  remote <ssh-dest> [--name <label>]  Run where Chrome is: link this Chrome to a remote
+                                    host, so an agent there can reach tabs you share
+                                    with "Remote" on. Runs until Ctrl-C.
+
 <tab> is the tab handle the user gave you, e.g. K7QM-4XRT-AB12. Shared tabs
 cannot be listed: the handle (copied to the clipboard when the user shares a
 tab) is the only way to reach one. Treat it as a secret.
@@ -1272,6 +1315,11 @@ async function main() {
   if (!cmd || cmd === 'help' || cmd === '--help' || cmd === '-h') {
     console.log(USAGE);
     process.exit(0);
+  }
+
+  if (cmd === 'remote') {
+    process.exitCode = await remoteCommand(args);
+    return;
   }
 
   if (cmd === 'list' || cmd === 'ls') {
@@ -1434,7 +1482,11 @@ async function main() {
 }
 
 // Guarded so tests can import the exported parsers without running the CLI.
-const invokedDirectly = process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+// Real paths, because import.meta.url has symlinks resolved (e.g. macOS /var ->
+// /private/var, or a symlinked skills dir) while argv[1] does not.
+const realPathOrNull = (p) => { try { return realpathSync(p); } catch { return null; } };
+const invokedDirectly = Boolean(process.argv[1])
+  && realPathOrNull(process.argv[1]) === realPathOrNull(fileURLToPath(import.meta.url));
 if (invokedDirectly) {
   main().catch((e) => { console.error(e.message); process.exit(1); });
 }

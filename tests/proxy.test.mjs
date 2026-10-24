@@ -9,187 +9,14 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { spawn, execFile } from 'node:child_process';
-import { mkdtempSync, rmSync, statSync, readdirSync, mkdirSync, symlinkSync, closeSync, openSync } from 'node:fs';
+import { rmSync, statSync, readdirSync, mkdirSync, symlinkSync, closeSync, openSync } from 'node:fs';
 import { once } from 'node:events';
-import net from 'node:net';
-import { resolve, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { promisify } from 'node:util';
+import { resolve } from 'node:path';
+import {
+  SCRIPTS, TAB, OTHER_TAB, withTimeout, until, FakeExtension, makeHome, startProxy, withProxy, runCli,
+} from './helpers.mjs';
 
-const SCRIPTS = resolve(dirname(fileURLToPath(import.meta.url)), '../skills/chrome-tab-control/scripts');
-const PROXY = resolve(SCRIPTS, 'tab-proxy.mjs');
-const CLI = resolve(SCRIPTS, 'tab-control-cli.mjs');
-const { ATTACH_METHOD, AttachError } = await import(resolve(SCRIPTS, 'protocol.mjs'));
-
-const TAB = { tabId: 42, url: 'https://example.com/', title: 'Example', handle: 'Q3MW-8HZD-T6PN' };
-const OTHER_TAB = { tabId: 7, url: 'https://other.test/', title: 'Other', handle: 'ZZZZ-YYYY-XXXX' };
-const WAIT_MS = 3000;
-const POLL_MS = 20;
-
-// --- harness ----------------------------------------------------------------
-
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-
-function withTimeout(promise, what) {
-  let timer;
-  const timeout = new Promise((_, reject) => {
-    timer = setTimeout(() => reject(new Error(`Timed out waiting for ${what}`)), WAIT_MS);
-  });
-  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
-}
-
-async function until(pred, what) {
-  const deadline = Date.now() + WAIT_MS;
-  while (!pred()) {
-    if (Date.now() > deadline) throw new Error(`Timed out waiting for ${what}`);
-    await sleep(POLL_MS);
-  }
-}
-
-// Fake extension: spawns a proxy, speaks native messaging to it, answers every
-// cdp_command, and records everything the proxy sends.
-class FakeExtension {
-  constructor(home) {
-    this.home = home;
-    this.received = [];
-    this.stderr = '';
-    this.proc = spawn(process.execPath, [PROXY], {
-      env: { ...process.env, HOME: home },
-      stdio: ['pipe', 'pipe', 'pipe'],
-    });
-    this.proc.stderr.on('data', (chunk) => { this.stderr += chunk; });
-    let buf = Buffer.alloc(0);
-    this.proc.stdout.on('data', (chunk) => {
-      buf = Buffer.concat([buf, chunk]);
-      while (buf.length >= 4 && buf.length >= 4 + buf.readUInt32LE(0)) {
-        const len = buf.readUInt32LE(0);
-        this.#onMessage(JSON.parse(buf.subarray(4, 4 + len).toString()));
-        buf = buf.subarray(4 + len);
-      }
-    });
-  }
-
-  get socketPath() {
-    return `${this.home}/.chrome-tab-control/sock/proxy-${this.proc.pid}.sock`;
-  }
-
-  #onMessage(msg) {
-    this.received.push(msg);
-    if (msg.type === 'cdp_command') {
-      this.send({ type: 'cdp_response', requestId: msg.requestId, result: cdpResult(msg) });
-    }
-  }
-
-  send(msg) {
-    const json = Buffer.from(JSON.stringify(msg));
-    const len = Buffer.alloc(4);
-    len.writeUInt32LE(json.length, 0);
-    this.proc.stdin.write(Buffer.concat([len, json]));
-  }
-
-  // Sends a tab change and waits until the proxy logged applying it, so a
-  // following connect cannot race ahead of it.
-  async apply(msg, logPattern) {
-    const before = (this.stderr.match(logPattern) || []).length;
-    this.send(msg);
-    await until(() => (this.stderr.match(logPattern) || []).length > before, `proxy to apply ${msg.type}`);
-  }
-
-  share(tab) {
-    return this.apply({ type: 'tab_shared', ...tab }, /Tab shared/g);
-  }
-
-  unshare(tabId) {
-    return this.apply({ type: 'tab_unshared', tabId }, /Tab unshared/g);
-  }
-
-  cdpCommands() {
-    return this.received.filter((m) => m.type === 'cdp_command');
-  }
-
-  async stop() {
-    this.proc.stdin.end();
-    if (this.proc.exitCode === null) await once(this.proc, 'exit');
-  }
-}
-
-function cdpResult(msg) {
-  if (msg.method === 'Runtime.evaluate') {
-    return { result: { value: `tab ${msg.tabId} evaluated ${msg.params.expression}` } };
-  }
-  return { echo: msg.method, tabId: msg.tabId };
-}
-
-// Minimal NDJSON socket client mirroring what the CLI sends.
-class Client {
-  static async connect(path) {
-    const c = new Client(net.connect(path));
-    await withTimeout(once(c.conn, 'connect'), 'socket connect');
-    return c;
-  }
-
-  constructor(conn) {
-    this.conn = conn;
-    this.lines = [];
-    this.nextId = 0;
-    this.closed = once(conn, 'close');
-    let buf = '';
-    conn.on('data', (chunk) => {
-      buf += chunk.toString();
-      const parts = buf.split('\n');
-      buf = parts.pop();
-      for (const p of parts.filter(Boolean)) this.lines.push(JSON.parse(p));
-    });
-    conn.on('error', () => {});
-  }
-
-  async request(method, params = {}) {
-    const id = ++this.nextId;
-    this.conn.write(JSON.stringify({ id, method, params }) + '\n');
-    await until(() => this.lines.some((m) => m.id === id), `reply to ${method}`);
-    return this.lines.find((m) => m.id === id);
-  }
-
-  attach(handle) {
-    return this.request(ATTACH_METHOD, { handle });
-  }
-
-  events(name) {
-    return this.lines.filter((m) => m.event === name);
-  }
-
-  close() {
-    this.conn.destroy();
-  }
-}
-
-// /tmp keeps socket paths under the ~104-byte macOS sun_path limit.
-const makeHome = () => mkdtempSync('/tmp/tc-test-');
-
-async function startProxy(home) {
-  const ext = new FakeExtension(home);
-  await until(() => ext.stderr.includes('Tab proxy started') || ext.proc.exitCode !== null, 'proxy start');
-  await until(() => { try { statSync(ext.socketPath); return true; } catch { return false; } }, 'proxy socket');
-  return ext;
-}
-
-// Spawns a proxy sharing the given tabs, runs fn, cleans up.
-async function withProxy(tabs, fn) {
-  const home = makeHome();
-  const ext = await startProxy(home);
-  try {
-    for (const tab of tabs) await ext.share(tab);
-    await fn({ ext, home, connect: () => Client.connect(ext.socketPath) });
-  } finally {
-    await ext.stop();
-    rmSync(home, { recursive: true, force: true });
-  }
-}
-
-const runCli = (home, args) => promisify(execFile)(process.execPath, [CLI, ...args], {
-  env: { ...process.env, HOME: home },
-}).then((r) => ({ code: 0, ...r }), (e) => ({ code: e.code, stdout: e.stdout, stderr: e.stderr }));
+const { AttachError } = await import(resolve(SCRIPTS, 'protocol.mjs'));
 
 // --- private socket directory ---------------------------------------------
 
@@ -198,7 +25,8 @@ test('proxy socket lives in a 0700 directory under ~/.chrome-tab-control', async
     for (const dir of ['.chrome-tab-control', '.chrome-tab-control/sock']) {
       assert.equal(statSync(`${home}/${dir}`).mode & 0o777, 0o700, dir);
     }
-    assert.equal(statSync(ext.socketPath).mode & 0o777, 0o600);
+    // The proxy chmods the socket in its listen callback, just after the file appears.
+    await until(() => (statSync(ext.socketPath).mode & 0o777) === 0o600, 'socket mode 0600');
   });
 });
 
@@ -326,6 +154,77 @@ test('re-sharing a tab under a new handle disconnects clients of the old one', a
   });
 });
 
+// --- malformed requests ----------------------------------------------------------
+
+// Each must be refused without taking the proxy down for everyone else.
+const MALFORMED_LINES = [
+  JSON.stringify({ id: 1, method: 'TabControl.attach', params: { handle: { toString: null } } }),
+  JSON.stringify({ id: 1, method: 'TabControl.attach', params: { handle: 42 } }),
+  JSON.stringify({ id: 1, method: 'TabControl.attach', params: null }),
+  'null',
+  '42',
+];
+
+test('malformed requests are refused and the proxy keeps serving', async () => {
+  await withProxy([TAB], async ({ connect, ext }) => {
+    for (const line of MALFORMED_LINES) {
+      const c = await connect();
+      c.conn.write(line + '\n');
+      await withTimeout(c.closed, `proxy to close the connection after ${line}`);
+      assert.equal(ext.proc.exitCode, null, `proxy exited after ${line}: ${ext.stderr}`);
+    }
+    const ok = await connect();
+    assert.equal((await ok.attach(TAB.handle)).ok, true);
+    ok.close();
+  });
+});
+
+// --- remote access -------------------------------------------------------------
+
+const FROM_REMOTE = { remote: 'devbox' };
+
+test('a remote attach is refused while remote access is off for the tab', async () => {
+  await withProxy([TAB], async ({ connect, ext }) => {
+    const c = await connect();
+    assert.equal((await c.attach(TAB.handle, FROM_REMOTE)).error, AttachError.REMOTE_DISABLED);
+    await withTimeout(c.closed, 'server to close the connection');
+    assert.equal(ext.cdpCommands().length, 0);
+  });
+});
+
+test('a remote attach is admitted once remote access is on for the tab', async () => {
+  await withProxy([{ ...TAB, remote: true }], async ({ connect }) => {
+    const c = await connect();
+    assert.equal((await c.attach(TAB.handle, FROM_REMOTE)).ok, true);
+    assert.equal((await c.request('Page.enable')).result.tabId, TAB.tabId);
+    c.close();
+  });
+});
+
+test('a remote attach with an unknown handle gets the same error as a local one', async () => {
+  await withProxy([TAB], async ({ connect }) => {
+    const c = await connect();
+    assert.equal((await c.attach('AAAA-BBBB-CCCC', FROM_REMOTE)).error, AttachError.UNKNOWN);
+  });
+});
+
+test('turning remote access off disconnects remote clients but keeps local ones', async () => {
+  await withProxy([{ ...TAB, remote: true }], async ({ connect, ext }) => {
+    const remote = await connect();
+    await remote.attach(TAB.handle, FROM_REMOTE);
+    const local = await connect();
+    await local.attach(TAB.handle);
+
+    await ext.share({ ...TAB, remote: false });
+    await withTimeout(remote.closed, 'remote client to be disconnected');
+    assert.equal((await local.request('Page.enable')).result.tabId, TAB.tabId);
+
+    const again = await connect();
+    assert.equal((await again.attach(TAB.handle, FROM_REMOTE)).error, AttachError.REMOTE_DISABLED);
+    local.close();
+  });
+});
+
 // --- CLI end to end ----------------------------------------------------------
 
 test('CLI reaches a tab by its handle', async () => {
@@ -359,6 +258,30 @@ test('CLI finds the tab across several proxies (one per Chrome profile)', async 
     await second.stop();
     rmSync(home, { recursive: true, force: true });
   }
+});
+
+test('CLI watch stops with an error as soon as its tab is unshared', async () => {
+  await withProxy([TAB], async ({ home, ext }) => {
+    const started = Date.now();
+    const run = runCli(home, ['watch', TAB.handle, '30']);
+    await until(() => ext.cdpCommands().some((m) => m.method === 'Network.enable'), 'watch to start');
+    await ext.unshare(TAB.tabId);
+    const r = await withTimeout(run, 'watch to exit');
+    assert.equal(r.code, 1);
+    assert.match(r.stderr, /Disconnected from the tab/);
+    assert.ok(Date.now() - started < 10_000);
+  });
+});
+
+test('CLI watch says the connection was lost, not revoked, when the proxy goes away', async () => {
+  await withProxy([TAB], async ({ home, ext }) => {
+    const run = runCli(home, ['watch', TAB.handle, '30']);
+    await until(() => ext.cdpCommands().some((m) => m.method === 'Network.enable'), 'watch to start');
+    ext.proc.kill('SIGKILL');
+    const r = await withTimeout(run, 'watch to exit');
+    assert.equal(r.code, 1);
+    assert.match(r.stderr, /Lost the connection to the tab/);
+  });
 });
 
 test('CLI rejects an unknown handle without touching any tab', async () => {

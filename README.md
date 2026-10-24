@@ -7,6 +7,7 @@ A Chrome extension + CLI + AI skill that lets you selectively share browser tabs
 ## ✨ Features
 
 - 🔒 **Per-tab access control** — only explicitly shared tabs are accessible
+- 🌐 **Remote hosts** — let an agent on another machine (over SSH) reach the tabs you choose, with a per-tab **Remote** switch
 - 🔑 **Secret tab handles** — shared tabs are never listed; each gets a random handle, and only agents you give it to can reach the tab
 - 📸 **Screenshots** — capture viewport with coordinate mapping
 - 🌳 **Accessibility tree** — structured page snapshot for AI understanding
@@ -239,6 +240,29 @@ Once the skill is installed (`make install-skill`), share a tab and give Claude 
 
 Claude Code will use the handle with the CLI to interact with the tab. If you forget the handle, it will ask for it.
 
+### 🌐 Use from a remote host (SSH / remote sessions)
+
+When your agent runs on another machine (over `ssh`, or a remote terminal session) but Chrome runs on your laptop, link the two. On the laptop, run:
+
+```bash
+tc remote devbox           # any ssh destination: host, user@host, or a ~/.ssh/config alias
+```
+
+Leave it running; Ctrl-C unlinks. Then, for each tab you want the remote agent to reach:
+
+1. Share the tab as usual. Sharing copies its handle.
+2. Tick **Remote** next to the handle in the extension popup. It is off by default, so a shared tab stays local-only until you choose otherwise.
+3. Paste the handle into the remote session. Your terminal is local, so the clipboard works as usual.
+
+The remote agent uses the handle exactly as it would locally (`tc info <tab>`). The link's terminal prints every remote attach (and refusal), so you can see what reached your tabs.
+
+**How it works:** `tc remote` keeps an `ssh -R` session open that forwards `~/.chrome-tab-control/sock/remote-<laptop>.sock` on the remote host to a local bridge. The bridge marks each attach as remote and hands it to the local tab proxy, which admits it only for tabs with **Remote** ticked. Turning **Remote** off disconnects remote agents from that tab at once and keeps local ones. If the SSH connection drops, the link reconnects with backoff. Restarting Chrome does not break it.
+
+**Requirements:**
+- Key-based SSH from the laptop to the remote host. The link runs ssh with `BatchMode=yes`, so it cannot answer password prompts.
+- Node.js 22+ and this skill installed on the remote host. No Chrome and no tab proxy are needed there.
+- The ssh destination must take a POSIX-style shell command (bash, zsh or sh as the login shell).
+
 ### CLI commands
 
 ```bash
@@ -315,6 +339,9 @@ tc waitfor <tab> "window.ready === true" --timeout 120 --interval 500
 # Bring tab to foreground (required for gesture-gated actions)
 tc front <tab>
 
+# Link this Chrome to a remote host (run on the Chrome machine; Ctrl-C to unlink)
+tc remote devbox [--name <label>]
+
 # Send raw CDP command
 tc evalraw <tab> "DOM.getDocument" "{}"
 ```
@@ -373,12 +400,16 @@ chrome-tab-control/
 │   └── gen-icons.mjs                   # Icon generator
 ├── tests/                              # Unit tests (node --test, no deps)
 │   ├── cli.test.mjs
-│   └── proxy.test.mjs                  # Proxy access control (spawns the real proxy)
+│   ├── proxy.test.mjs                  # Proxy access control (spawns the real proxy)
+│   ├── remote.test.mjs                 # Remote link: bridge, ssh supervisor (fake ssh)
+│   ├── helpers.mjs                     # Shared harness: fake extension, socket client
+│   └── fixtures/fake-ssh.mjs           # ssh stand-in with a local "remote host"
 └── skills/chrome-tab-control/          # Skill directory (what AI agents use)
     ├── SKILL.md                        # Skill manifest
     └── scripts/
         ├── tab-control-cli.mjs         # CLI tool (all commands)
         ├── tab-proxy.mjs             # Tab proxy (native messaging bridge)
+        ├── remote-link.mjs           # `remote` command: bridge + ssh -R supervisor
         ├── protocol.mjs              # Paths and auth constants shared by CLI and proxy
         └── tab-proxy-wrapper.sh      # Node.js path resolver for nvm/volta/fnm
 ```
@@ -387,12 +418,15 @@ chrome-tab-control/
 
 **CLI → Agent:** Unix socket (NDJSON) → tab-proxy.mjs → stdin/stdout (native messaging) → extension → `chrome.debugger.sendCommand()` → Chrome
 
+**Remote CLI → Chrome:** remote-<name>.sock on the remote host → `ssh -R` → bridge-<id>.sock (remote-link.mjs; one per host and name) → proxy-<pid>.sock → … as above
+
 **Chrome → CLI (events):** Chrome → `chrome.debugger.onEvent` → extension → native messaging → tab-proxy.mjs → sends to the sockets attached to that tab
 
 ### Key design decisions
 
 - **No `--remote-debugging-port`** — the extension uses `chrome.debugger` API, which is scoped to individual tabs
 - **Tab handles instead of tab IDs** — the tab proxy listens on one socket, `~/.chrome-tab-control/sock/proxy-<pid>.sock` (one proxy per Chrome profile). A client attaches to a tab by sending its handle, and the CLI tries each proxy socket until one accepts it. Nothing lists the shared tabs
+- **Remote access over SSH, not a network listener** — a remote host reaches tabs only through a Unix socket forwarded by an `ssh -R` session that you started. The forwarded socket is named `remote-*.sock` so a tab proxy on the remote host never mistakes it for one of its own stale `proxy-<pid>.sock` files. sshd does not delete a forwarded socket when the link closes, so the link removes it before reconnecting
 - **Zero dependencies** — pure Node.js 22+, no npm install needed
 - **Tab proxy** acts as a reverse proxy between CLI clients and the Chrome extension
 
@@ -413,6 +447,8 @@ The `shot` command prints the DPR and conversion formula. For Retina displays (D
 - Shared tabs are never listed. A client must attach with the tab's secret handle (see [Give the tab handle to your agent](#give-the-tab-handle-to-your-agent)) before it gets any command results or CDP events, and only for that tab
 - Unix sockets are `chmod 600` inside `~/.chrome-tab-control/sock/`, which is `0700` and must be a real directory owned by you (the proxy refuses to start otherwise), so other accounts cannot reach or plant sockets
 - Extension requires explicit user action to share each tab
+- Remote access is off for every tab until you tick **Remote** for it, and it needs a running `tc remote` link that you started. The bridge, not the remote client, marks a request as remote, so a remote agent cannot pass itself off as local. The link carries only attach requests to the tab proxy, which checks the handle exactly as for a local client
+- Anyone who can act as your user account on the remote host can use the forwarded socket while the link is up, and still needs a tab handle to reach a tab. Treat a handle you paste into a remote session as readable by that host
 
 ## 📄 License
 

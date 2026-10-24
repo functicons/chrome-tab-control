@@ -52,6 +52,9 @@ function render(tabs, activeTabId) {
           ${t.tabId === copiedTabId
             ? '<button class="copy-btn copied">Copied!</button>'
             : '<button class="copy-btn">Copy</button>'}
+          <label class="remote-toggle ${t.remote ? 'on' : ''}" title="Let agents on other machines reach this tab (through tab-control remote)">
+            <input type="checkbox" class="remote-cb" data-tab-id="${t.tabId}" ${t.remote ? 'checked' : ''}> Remote
+          </label>
         </div>` : ''}
       </div>
       <button class="share-btn ${t.shared ? 'shared' : ''}"
@@ -97,6 +100,16 @@ tabsDiv.addEventListener('click', async (e) => {
   // Sharing already copied the tab handle to the clipboard; show that.
   if (resp.ok && resp.copied) markCopied(tabId);
   else loadTabs();
+});
+
+tabsDiv.addEventListener('change', async (e) => {
+  const cb = e.target.closest('.remote-cb');
+  if (!cb) return;
+  const resp = await chrome.runtime.sendMessage({
+    type: 'set_remote', tabId: parseInt(cb.dataset.tabId, 10), remote: cb.checked,
+  });
+  if (!resp?.ok) alert('Error: ' + (resp?.error || 'unknown'));
+  loadTabs();
 });
 
 async function loadTabs() {

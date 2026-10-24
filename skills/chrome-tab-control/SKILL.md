@@ -22,6 +22,16 @@ Control Chrome tabs that the user has explicitly shared via the Tab Control exte
 
 Shared tabs are **never listed**: there is no way to discover them. The tab handle is the only way to reach a tab, and the user decides who gets it.
 
+### When Chrome runs on another machine
+
+You may run on a remote host (over SSH) while the user's Chrome is on their laptop. The CLI works the same once the user links the two:
+
+- If a command says *"Tab Control is not running"* and you are on a remote host, ask the user to run `tab-control remote <this-host>` **on the machine where Chrome runs** (the skill's `scripts/tab-control-cli.mjs remote <ssh-destination>`), and to leave it running.
+- If a command says *"Remote access is off for tab …"*, ask the user to tick **Remote** for that tab in the Tab Control popup. Do not retry in a loop.
+- Do not try to set up the link yourself: it runs on the user's machine and its SSH connection is theirs to make.
+- If a command stops with *"Disconnected from the tab"*, the user unshared the tab or turned its remote access off. Treat that as their decision: ask before trying again.
+- If it stops with *"Lost the connection to the tab"*, Chrome, the tab proxy or the remote link went away. Tell the user; on a remote host, the link (`tab-control remote`) may have dropped and is reconnecting.
+
 ## Commands
 
 All commands use `scripts/tab-control-cli.mjs`. The `<tab>` argument is the tab handle the user gave you.
@@ -197,6 +207,7 @@ CSS px = screenshot image px / DPR
 
 - Run `info <tab>` first to confirm the handle points at the page the user means.
 - If you have no tab handle, ask the user to share the tab and send you its handle.
+- On a remote host, `shot` saves the screenshot on that remote host, which is where you read it.
 - The yellow "debugging this tab" bar is expected — it confirms the tab is shared.
 - Prefer `snap` over `html` for understanding page structure.
 - Use `type` (not eval) to enter text in cross-origin iframes.

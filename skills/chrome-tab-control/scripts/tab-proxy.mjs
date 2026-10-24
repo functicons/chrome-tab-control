@@ -10,25 +10,27 @@
 // Access control: shared tabs are never listed. The extension gives each shared
 // tab a random, secret tab handle; a client attaches to a tab by sending its
 // handle (ATTACH_METHOD) and only then can it send CDP commands or receive
-// events for that tab. The host forwards commands to the extension, which
-// executes them via chrome.debugger.sendCommand(). The socket directory is
-// private (0700).
+// events for that tab. A client coming through a remote link (attach carries
+// params.remote) is admitted only to tabs the user allowed remote access to,
+// and is disconnected when the user turns that off. The host forwards commands
+// to the extension, which executes them via chrome.debugger.sendCommand(). The
+// socket directory is private (0700).
 
 import net from 'net';
 import { createHash, timingSafeEqual } from 'crypto';
-import { unlinkSync, chmodSync, mkdirSync, lstatSync, readdirSync } from 'fs';
+import { unlinkSync, chmodSync, readdirSync } from 'fs';
 import { resolve } from 'path';
 import {
-  configDir, sockDir, proxySocketPath, PROXY_SOCKET_RE,
-  PRIVATE_DIR_MODE, ATTACH_METHOD, AttachError, normalizeTabHandle,
+  configDir, sockDir, proxySocketPath, PROXY_SOCKET_RE, ensurePrivateDir,
+  PRIVATE_SOCKET_MODE, ATTACH_METHOD, AttachError, normalizeTabHandle, isRequestObject,
 } from './protocol.mjs';
 
 const CDP_TIMEOUT = 15000;
 const SOCKET_PATH = proxySocketPath(process.pid);
 
 // State
-const sharedTabs = new Map();   // tabId -> {url, title, handle}
-const clients = new Map();      // conn -> {tabId: number | null}
+const sharedTabs = new Map();   // tabId -> {url, title, handle, remote: boolean}
+const clients = new Map();      // conn -> {tabId: number | null, remote: string | null}
 const pendingRequests = new Map(); // requestId -> {resolve, reject, timer}
 let requestCounter = 0;
 
@@ -72,16 +74,6 @@ function log(msg) {
 // ---------------------------------------------------------------------------
 // Startup: private socket directory
 // ---------------------------------------------------------------------------
-
-// Creates dir with 0700 and refuses to use it unless it is a real directory
-// owned by this user, so no other account can plant or reach our socket.
-function ensurePrivateDir(dir) {
-  mkdirSync(dir, { recursive: true, mode: PRIVATE_DIR_MODE });
-  const st = lstatSync(dir);
-  if (!st.isDirectory() || st.isSymbolicLink()) throw new Error(`${dir} is not a directory`);
-  if (st.uid !== process.getuid()) throw new Error(`${dir} is not owned by the current user`);
-  chmodSync(dir, PRIVATE_DIR_MODE);
-}
 
 function isProcessAlive(pid) {
   try {
@@ -136,12 +128,14 @@ function findTabByHandle(handle) {
   return found;
 }
 
-function clientsOf(tabId) {
-  return [...clients].filter(([, c]) => c.tabId === tabId).map(([conn]) => conn);
+function clientsOf(tabId, { remoteOnly = false } = {}) {
+  return [...clients]
+    .filter(([, c]) => c.tabId === tabId && (!remoteOnly || c.remote !== null))
+    .map(([conn]) => conn);
 }
 
-function disconnectClientsOf(tabId) {
-  for (const conn of clientsOf(tabId)) {
+function disconnectClientsOf(tabId, opts) {
+  for (const conn of clientsOf(tabId, opts)) {
     writeLine(conn, { event: '_tab_unshared' });
     conn.end();
   }
@@ -163,16 +157,20 @@ function handleExtensionMessage(msg) {
   }
 }
 
-function onTabShared({ tabId, url, title, handle }) {
+// Also sent again for an already shared tab, when the extension reconnects or
+// the user toggles remote access.
+function onTabShared({ tabId, url, title, handle, remote }) {
   if (!handle) {
     log(`Ignoring share of tab ${tabId}: no tab handle`);
     return;
   }
   const normalized = normalizeTabHandle(handle);
+  const allowRemote = remote === true;
   // Re-shared under a new handle: sessions attached with the old one end.
   if (sharedTabs.get(tabId)?.handle !== normalized) disconnectClientsOf(tabId);
-  sharedTabs.set(tabId, { url, title, handle: normalized });
-  log(`Tab shared: ${tabId} — ${url}`);
+  else if (!allowRemote) disconnectClientsOf(tabId, { remoteOnly: true });
+  sharedTabs.set(tabId, { url, title, handle: normalized, remote: allowRemote });
+  log(`Tab shared: ${tabId} — ${url}${allowRemote ? ' (remote access on)' : ''}`);
 }
 
 function onTabUnshared({ tabId }) {
@@ -222,13 +220,28 @@ function rejectClient(conn, id, error) {
 }
 
 function handleAttach(client, id, params, conn) {
-  const tabId = findTabByHandle(params?.handle);
+  if (client.remote !== null) {
+    log(`Attach rejected: ${client.remote} tried to attach again on one connection`);
+    return rejectClient(conn, id, AttachError.REMOTE_REATTACH);
+  }
+  if (typeof params?.handle !== 'string') {
+    log('Attach rejected: tab handle is not a string');
+    return rejectClient(conn, id, AttachError.UNKNOWN);
+  }
+  const tabId = findTabByHandle(params.handle);
   if (tabId === null) {
     log('Attach rejected: unknown tab handle');
     return rejectClient(conn, id, AttachError.UNKNOWN);
   }
+  const { url, title, remote: remoteAllowed } = sharedTabs.get(tabId);
+  const remote = typeof params?.remote === 'string' ? params.remote : null;
+  if (remote !== null && !remoteAllowed) {
+    log(`Attach rejected: remote access is off for tab ${tabId} (from ${remote})`);
+    return rejectClient(conn, id, AttachError.REMOTE_DISABLED);
+  }
   client.tabId = tabId;
-  const { url, title } = sharedTabs.get(tabId);
+  client.remote = remote;
+  if (remote !== null) log(`Remote attach to tab ${tabId} from ${remote}`);
   writeLine(conn, { id, ok: true, result: { tabId, url, title } });
 }
 
@@ -268,7 +281,7 @@ function sendCdpCommand(tabId, method, params, timeout = CDP_TIMEOUT) {
 }
 
 const server = net.createServer((conn) => {
-  clients.set(conn, { tabId: null });
+  clients.set(conn, { tabId: null, remote: null });
   let buf = '';
 
   conn.on('data', (chunk) => {
@@ -283,7 +296,15 @@ const server = net.createServer((conn) => {
         writeLine(conn, { id: null, ok: false, error: 'Invalid JSON' });
         continue;
       }
-      handleCliRequest(req, conn);
+      if (!isRequestObject(req)) {
+        rejectClient(conn, null, 'Invalid request: expected a JSON object');
+        return;
+      }
+      // A client's bad request must never take the proxy down for every client.
+      handleCliRequest(req, conn).catch((e) => {
+        log(`Request failed: ${e.message}`);
+        rejectClient(conn, req.id ?? null, 'Internal error');
+      });
     }
   });
 
@@ -293,7 +314,7 @@ const server = net.createServer((conn) => {
 
 try { unlinkSync(SOCKET_PATH); } catch {}
 server.listen(SOCKET_PATH, () => {
-  try { chmodSync(SOCKET_PATH, 0o600); } catch {}
+  try { chmodSync(SOCKET_PATH, PRIVATE_SOCKET_MODE); } catch {}
 });
 
 function cleanup() {

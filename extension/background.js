@@ -4,7 +4,9 @@
 const NATIVE_HOST = 'com.functicons.chrome_tab_control';
 
 let nativePort = null;
-const sharedTabs = new Map(); // tabId -> {url, title, handle}
+// remote: whether agents on other machines (through `tab-control remote`) may
+// reach the tab. Off by default; the user turns it on per tab in the popup.
+const sharedTabs = new Map(); // tabId -> {url, title, handle, remote}
 const annotatingTabs = new Set(); // tabId
 
 // ---------------------------------------------------------------------------
@@ -165,15 +167,14 @@ function ensureNativePort() {
   });
 
   // Re-send shared tabs and their handles so a restarted proxy can route to them
-  if (sharedTabs.size > 0) {
-    for (const [tabId, info] of sharedTabs) {
-      nativePort.postMessage({
-        type: 'tab_shared', tabId, url: info.url, title: info.title, handle: info.handle,
-      });
-    }
-  }
+  for (const tabId of sharedTabs.keys()) postTabShared(nativePort, tabId);
 
   return nativePort;
+}
+
+function postTabShared(port, tabId) {
+  const { url, title, handle, remote } = sharedTabs.get(tabId);
+  port.postMessage({ type: 'tab_shared', tabId, url, title, handle, remote });
 }
 
 async function handleCdpCommand(msg) {
@@ -422,16 +423,25 @@ async function shareTab(tabId) {
   await chrome.debugger.attach({ tabId }, '1.3');
 
   const handle = generateTabHandle();
-  sharedTabs.set(tabId, { url: tab.url, title: tab.title, handle });
+  sharedTabs.set(tabId, { url: tab.url, title: tab.title, handle, remote: false });
 
   await injectConsoleHistory(tabId);
 
-  const port = ensureNativePort();
-  port.postMessage({ type: 'tab_shared', tabId, url: tab.url, title: tab.title, handle });
+  postTabShared(ensureNativePort(), tabId);
   await addTitlePrefix(tabId);
   const copied = await copyToClipboard(handle);
   broadcastState();
   return { copied };
+}
+
+// Same handle, so local agents stay attached; turning remote off makes the
+// proxy disconnect the remote ones.
+function setRemoteAccess(tabId, remote) {
+  const info = sharedTabs.get(tabId);
+  if (!info) throw new Error('Tab is not shared');
+  info.remote = remote === true;
+  postTabShared(ensureNativePort(), tabId);
+  broadcastState();
 }
 
 async function unshareTab(tabId) {
@@ -604,6 +614,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           title: t.title,
           shared: sharedTabs.has(t.id),
           handle: sharedTabs.get(t.id)?.handle || null,
+          remote: sharedTabs.get(t.id)?.remote === true,
           annotating: annotatingTabs.has(t.id),
         }));
       sendResponse({ tabs: tabList });
@@ -623,6 +634,16 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       .then(() => sendResponse({ ok: true }))
       .catch((e) => sendResponse({ ok: false, error: e.message }));
     return true;
+  }
+
+  if (msg.type === 'set_remote') {
+    try {
+      setRemoteAccess(msg.tabId, msg.remote);
+      sendResponse({ ok: true });
+    } catch (e) {
+      sendResponse({ ok: false, error: e.message });
+    }
+    return false;
   }
 
   if (msg.type === 'annotate') {

@@ -1,4 +1,5 @@
-// Unit tests for the pure argument-parsing logic in tab-control-cli.mjs.
+// Unit tests for the pure argument-parsing logic in tab-control-cli.mjs, and
+// that its entry point runs.
 //
 // Everything else in the CLI needs a live Chrome tab, but these parsers are pure
 // and are exactly where silent misbehaviour is cheapest to introduce.
@@ -9,6 +10,9 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { spawnSync } from 'node:child_process';
+import { mkdtempSync, rmSync, symlinkSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 
 const CLI = resolve(dirname(fileURLToPath(import.meta.url)), '../skills/chrome-tab-control/scripts/tab-control-cli.mjs');
 const { parseKeySpec, parseRepeat, parseWaitForArgs } = await import(pathToFileURL(CLI).href);
@@ -115,4 +119,17 @@ test('parseWaitForArgs rejects non-positive and non-numeric flag values', () => 
 test('parseWaitForArgs returns an empty expression when only flags are given', () => {
   assert.equal(parseWaitForArgs(['--timeout', '5']).expression, '');
   assert.equal(parseWaitForArgs([]).expression, '');
+});
+
+test('the CLI runs when invoked through a symlinked path', () => {
+  const dir = mkdtempSync(resolve(tmpdir(), 'tc-cli-link-'));
+  try {
+    const link = resolve(dir, 'tab-control-cli.mjs');
+    symlinkSync(CLI, link);
+    const r = spawnSync(process.execPath, [link, '--help'], { encoding: 'utf8' });
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /Usage: tab-control/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
