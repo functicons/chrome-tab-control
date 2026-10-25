@@ -233,9 +233,9 @@ function rejectClient(conn, id, error) {
 }
 
 function handleAttach(client, id, params, conn) {
-  if (client.remote !== null) {
-    log(`Attach rejected: ${client.remote} tried to attach again on one connection`);
-    return rejectClient(conn, id, AttachError.REMOTE_REATTACH);
+  if (client.tabId !== null) {
+    log(`Attach rejected: ${client.remote ?? 'a local client'} tried to attach again on one connection`);
+    return rejectClient(conn, id, client.remote !== null ? AttachError.REMOTE_REATTACH : AttachError.REATTACH);
   }
   if (typeof params?.handle !== 'string') {
     log('Attach rejected: tab handle is not a string');

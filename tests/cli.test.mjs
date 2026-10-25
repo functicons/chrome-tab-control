@@ -15,7 +15,9 @@ import { mkdtempSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 
 const CLI = resolve(dirname(fileURLToPath(import.meta.url)), '../skills/chrome-tab-control/scripts/tab-control-cli.mjs');
-const { parseKeySpec, parseRepeat, parseWaitForArgs, parseRunArgs, toPageExpression } = await import(pathToFileURL(CLI).href);
+const {
+  parseKeySpec, parseRepeat, parseWaitForArgs, parseRunArgs, toPageExpression, remoteObjectValue,
+} = await import(pathToFileURL(CLI).href);
 
 // --- parseKeySpec -----------------------------------------------------------
 
@@ -153,6 +155,21 @@ test('toPageExpression rejects args with a string, and an empty or non-code valu
   assert.throws(() => toPageExpression('x', [1]), /only be passed with a function/);
   assert.throws(() => toPageExpression(''), /expression string or a function/);
   assert.throws(() => toPageExpression(42), /expression string or a function/);
+});
+
+// --- remoteObjectValue --------------------------------------------------------
+
+test('remoteObjectValue returns a JSON value as sent', () => {
+  assert.deepEqual(remoteObjectValue({ type: 'object', value: { a: [1] } }), { a: [1] });
+  assert.equal(remoteObjectValue({ type: 'undefined' }), undefined);
+});
+
+test('remoteObjectValue decodes the values JSON cannot carry', () => {
+  assert.ok(Number.isNaN(remoteObjectValue({ type: 'number', unserializableValue: 'NaN' })));
+  assert.equal(remoteObjectValue({ type: 'number', unserializableValue: 'Infinity' }), Infinity);
+  assert.equal(remoteObjectValue({ type: 'number', unserializableValue: '-Infinity' }), -Infinity);
+  assert.ok(Object.is(remoteObjectValue({ type: 'number', unserializableValue: '-0' }), -0));
+  assert.equal(remoteObjectValue({ type: 'bigint', unserializableValue: '12345678901234567890n' }), 12345678901234567890n);
 });
 
 test('the CLI runs when invoked through a symlinked path', () => {

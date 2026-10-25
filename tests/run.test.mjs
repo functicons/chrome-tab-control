@@ -9,7 +9,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { writeFileSync } from 'node:fs';
-import { TAB, withTimeout, until, withProxy, runCli, runCliWithStdin } from './helpers.mjs';
+import { TAB, OTHER_TAB, CLI, withTimeout, until, withProxy, runCli, runCliWithStdin } from './helpers.mjs';
+import { spawn } from 'node:child_process';
+import { once } from 'node:events';
 
 const evaluated = (expr) => `tab ${TAB.tabId} evaluated ${expr}`;
 
@@ -21,6 +23,8 @@ function runScript(home, source, extraArgs = []) {
 }
 
 const evaluateCount = (ext) => ext.cdpCommands().filter((m) => m.method === 'Runtime.evaluate').length;
+const evaluatedExpressions = (ext) => ext.cdpCommands()
+  .filter((m) => m.method === 'Runtime.evaluate').map((m) => m.params.expression);
 
 test('run executes several steps against the tab and prints the returned value', async () => {
   await withProxy([TAB], async ({ home }) => {
@@ -104,7 +108,8 @@ test('run stops a script that outlives --timeout', async () => {
 test('run stops with an error as soon as its tab is unshared mid-script', async () => {
   await withProxy([TAB], async ({ home, ext }) => {
     const file = `${home}/loop.js`;
-    writeFileSync(file, "while (true) {\n  await tab.eval('poll');\n  await sleep(20);\n}\n");
+    // No pause between steps, so a step is always in flight when the tab goes.
+    writeFileSync(file, "while (true) {\n  await tab.eval('poll');\n}\n");
     const run = runCli(home, ['run', TAB.handle, file]);
     await until(() => evaluateCount(ext) > 0, 'script to start');
     await ext.unshare(TAB.tabId);
@@ -128,5 +133,50 @@ test('run rejects a script file that does not exist', async () => {
     const r = await runCli(home, ['run', TAB.handle, `${home}/missing.js`]);
     assert.equal(r.code, 1);
     assert.match(r.stderr, /ENOENT/);
+  });
+});
+
+test('run reads a script piped by a writer that finishes late', async () => {
+  await withProxy([TAB], async ({ home }) => {
+    const proc = spawn(process.execPath, [CLI, 'run', TAB.handle], { env: { ...process.env, HOME: home } });
+    let stdout = '';
+    proc.stdout.on('data', (chunk) => { stdout += chunk; });
+    proc.stdin.write("return await tab.eval(");
+    setTimeout(() => proc.stdin.end("'late');"), 300);
+    const [code] = await withTimeout(once(proc, 'close'), 'run to exit');
+    assert.equal(code, 0);
+    assert.equal(stdout.trim(), evaluated('late'));
+  });
+});
+
+test('run fails as soon as the tab is unshared, even while the script sleeps', async () => {
+  await withProxy([TAB], async ({ home, ext }) => {
+    const file = `${home}/sleepy.js`;
+    writeFileSync(file, "await tab.eval('ready');\nawait sleep(30000);\nreturn 'done';\n");
+    const run = runCli(home, ['run', TAB.handle, file]);
+    await until(() => evaluateCount(ext) > 0, 'script to start');
+    await ext.unshare(TAB.tabId);
+    const r = await withTimeout(run, 'run to exit');
+    assert.equal(r.code, 1);
+    assert.match(r.stderr, /Disconnected from the tab/);
+    assert.equal(r.stdout, '');
+  });
+});
+
+test('run cuts the tab connection at the deadline, so a late step never reaches the tab', async () => {
+  await withProxy([TAB], async ({ home, ext }) => {
+    const r = await runScript(home, "await sleep(400);\nawait tab.eval('too late');\n", ['--timeout', '0.1']);
+    assert.equal(r.code, 1);
+    assert.match(r.stderr, /did not finish within 0\.1s/);
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    assert.ok(!evaluatedExpressions(ext).includes('too late'));
+  });
+});
+
+test('run refuses to let a script attach to another tab', async () => {
+  await withProxy([TAB, OTHER_TAB], async ({ home }) => {
+    const r = await runScript(home, `await tab.cdp('TabControl.attach', { handle: '${OTHER_TAB.handle}' });`);
+    assert.equal(r.code, 1);
+    assert.match(r.stderr, /TabControl\.attach is not allowed.*\(script line 1\)/);
   });
 });

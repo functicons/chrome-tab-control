@@ -345,7 +345,15 @@ async function evalValue(cdp, expression) {
   if (result.exceptionDetails) {
     throw new Error(result.exceptionDetails.exception?.description || result.exceptionDetails.text);
   }
-  return result.result.value;
+  return remoteObjectValue(result.result);
+}
+
+// CDP sends values JSON cannot carry (NaN, ±Infinity, -0, BigInt) as a string in
+// unserializableValue instead of value.
+export function remoteObjectValue({ value, unserializableValue }) {
+  if (unserializableValue === undefined) return value;
+  if (unserializableValue.endsWith('n')) return BigInt(unserializableValue.slice(0, -1));
+  return Number(unserializableValue);
 }
 
 function formatValue(val) {
@@ -1271,7 +1279,10 @@ function makeTabApi(cdp) {
   return Object.freeze(mapValues({
     info: () => evalValue(cdp, '({ url: location.href, title: document.title })'),
     eval: (expr, ...args) => evalValue(cdp, toPageExpression(expr, args)),
-    cdp: (method, params = {}) => cdp.send(method, params),
+    cdp: (method, params = {}) => {
+      if (method === ATTACH_METHOD) throw new Error(`${ATTACH_METHOD} is not allowed: a script works on its own tab only`);
+      return cdp.send(method, params);
+    },
     snap: () => snapshotStr(cdp),
     html: (selector) => htmlStr(cdp, selector),
     shot: (file, { highlight } = {}) => shotStr(cdp, file ?? null, highlight ?? null),
@@ -1310,26 +1321,54 @@ function withScriptLine(error) {
   return new Error(line ? `${message} (script line ${line})` : message);
 }
 
-function readScript(file) {
-  if (file === STDIN_ARG && process.stdin.isTTY) {
+// Reads stdin as a stream: a synchronous read of a pipe whose writer has not
+// finished fails with EAGAIN.
+async function readStdin() {
+  if (process.stdin.isTTY) {
     throw new Error('script required: pass a script file, or pipe it on stdin (e.g. a heredoc)');
   }
-  const source = readFileSync(file === STDIN_ARG ? 0 : file, 'utf8');
+  let source = '';
+  process.stdin.setEncoding('utf8');
+  for await (const chunk of process.stdin) source += chunk;
+  return source;
+}
+
+async function readScript(file) {
+  const source = file === STDIN_ARG ? await readStdin() : readFileSync(file, 'utf8');
   if (!source.trim()) throw new Error(`script is empty (${file === STDIN_ARG ? 'nothing on stdin' : file})`);
   return source;
 }
 
-async function runStr(cdp, source, timeoutMs) {
-  let script;
-  try { script = compileScript(source); } catch (e) { throw withScriptLine(e); }
-  let timer;
-  const timeout = new Promise((_, reject) => {
-    timer = setTimeout(() => reject(new Error(
-      `Script did not finish within ${timeoutMs / 1000}s (raise it with --timeout <sec>)`,
-    )), timeoutMs);
-  });
+// Read and compile before attaching, so a bad script never touches the tab.
+async function loadScript(args) {
+  const { file, timeoutMs } = parseRunArgs(args);
   try {
-    return formatValue(await Promise.race([script(makeTabApi(cdp), sleep), timeout]));
+    return { script: compileScript(await readScript(file)), timeoutMs };
+  } catch (e) {
+    throw withScriptLine(e);
+  }
+}
+
+// Ends the run at the deadline or as soon as the tab connection drops (e.g. the
+// tab was unshared while the script slept). At the deadline the connection is
+// closed, so the script cannot act on the tab afterwards. A busy synchronous
+// loop cannot be interrupted, though: the deadline is checked when it yields.
+async function runStr(cdp, script, timeoutMs) {
+  let timer;
+  const stopped = new Promise((_, reject) => {
+    timer = setTimeout(() => {
+      reject(new Error(`Script did not finish within ${timeoutMs / 1000}s (raise it with --timeout <sec>)`));
+      cdp.close();
+    }, timeoutMs);
+    // A step in flight fails on its own, with its script line; let it win.
+    cdp.closed.then(() => setImmediate(() => reject(new Error(cdp.endReason()))));
+  });
+  // Whichever loses the race settles later; its outcome no longer matters.
+  stopped.catch(() => {});
+  const running = script(makeTabApi(cdp), sleep);
+  running.catch(() => {});
+  try {
+    return formatValue(await Promise.race([running, stopped]));
   } catch (e) {
     throw withScriptLine(e);
   } finally {
@@ -1492,6 +1531,16 @@ async function main() {
     process.exit(1);
   }
 
+  let run;
+  if (cmd === 'run') {
+    try {
+      run = await loadScript(args.slice(1));
+    } catch (e) {
+      console.error(`Error: ${e.message}`);
+      process.exit(1);
+    }
+  }
+
   let cdp, tab;
   try {
     ({ cdp, tab } = await attachToTab(handle));
@@ -1612,11 +1661,7 @@ async function main() {
         result = await evalRawStr(cdp, cmdArgs[0], jsonParams);
         break;
       }
-      case 'run': {
-        const { file, timeoutMs } = parseRunArgs(cmdArgs);
-        result = await runStr(cdp, readScript(file), timeoutMs);
-        break;
-      }
+      case 'run': result = await runStr(cdp, run.script, run.timeoutMs); break;
       default:
         console.error(`Unknown command: ${cmd}`);
         process.exit(1);

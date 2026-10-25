@@ -58,6 +58,8 @@ export const AttachError = Object.freeze({
   // A remote connection attaches once, so the remote link's log of attaches
   // (it sees only a connection's first request) is complete.
   REMOTE_REATTACH: 'A remote connection cannot attach again; open a new connection',
+  // One connection reaches one tab, so whatever holds it cannot switch tabs.
+  REATTACH: 'A connection attaches to one tab only; open a new connection',
 });
 
 // Request lines that are not a JSON object (e.g. `null`, `42`) are refused.

@@ -215,8 +215,9 @@ JS
 
 `run <tab> [file|-] [--timeout <sec>]` reads the script from a file, or from stdin
 (the default). It is the body of an async function: use `await` and `return`
-freely. A returned string prints as-is, anything else as JSON. The whole script is
-stopped after `--timeout` seconds (default 300).
+freely. A returned string prints as-is, anything else as JSON. At `--timeout`
+seconds (default 300) the run fails and its tab connection is closed, so no later
+step reaches the tab; it also fails at once if the user unshares the tab.
 
 In scope: `tab` and `sleep(ms)`. Methods on `tab` mirror the commands above, with
 the same checks, and return the same reports unless noted:
@@ -226,7 +227,7 @@ the same checks, and return the same reports unless noted:
 | `tab.eval(expr \| fn, ...args)` | **Returns the value.** A function runs *in the page*: it cannot see script variables, so pass them as `args` (JSON-encoded). |
 | `tab.waitfor(expr \| fn, { timeout, interval, args })` | `timeout` in seconds (60), `interval` in ms (250) |
 | `tab.info()` | **Returns** `{ url, title }`, current after navigation |
-| `tab.cdp(method, params)` | **Returns** the raw CDP result |
+| `tab.cdp(method, params)` | **Returns** the raw CDP result. Cannot attach to another tab. |
 | `tab.click(sel, { real, exact })`, `tab.clickxy(x, y)` | |
 | `tab.fill(sel, text)`, `tab.focus(sel)`, `tab.type(text)`, `tab.key(spec, count)` | |
 | `tab.nav(url, { crossOrigin })`, `tab.refresh({ hard })`, `tab.front()` | `nav` stays same-host unless `crossOrigin: true` (needs the user's consent, as for the command) |
@@ -248,8 +249,9 @@ Guidelines:
 - Errors name the script line, e.g. `Element not found: #save (script line 4)`,
   and exit non-zero. Steps before the failing line have already happened, so check
   the page state before re-running a script that is not safe to repeat.
-- A script is plain Node.js running as you, like any shell command; it reaches only
-  the tab whose handle it was given.
+- A script has `tab` and `sleep` only: no `import` or `require`. To save results,
+  `return` them and redirect the output (`run <tab> s.js > out.json`); to use local
+  data, write it into the script.
 
 ## Coordinates
 

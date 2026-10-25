@@ -103,6 +103,16 @@ test('attaching returns the tab, and commands go to that tab', async () => {
   });
 });
 
+test('a connection attached to one tab cannot attach to another', async () => {
+  await withProxy([TAB, OTHER_TAB], async ({ ext, connect }) => {
+    const c = await connect();
+    assert.equal((await c.attach(TAB.handle)).ok, true);
+    assert.equal((await c.attach(OTHER_TAB.handle)).error, AttachError.REATTACH);
+    await withTimeout(c.closed, 'proxy to close the connection');
+    assert.ok(ext.cdpCommands().every((m) => m.tabId === TAB.tabId));
+  });
+});
+
 test('tab handle matching ignores case and surrounding whitespace', async () => {
   await withProxy([TAB], async ({ connect }) => {
     const c = await connect();
