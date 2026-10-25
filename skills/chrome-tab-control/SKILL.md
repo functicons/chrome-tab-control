@@ -1,6 +1,6 @@
 ---
 name: chrome-tab-control
-description: Control user-shared Chrome tabs — take screenshots, inspect accessibility trees, evaluate JS, navigate, click elements, type text, and monitor console/network activity in real time
+description: Control user-shared Chrome tabs — take screenshots, inspect accessibility trees, evaluate JS, navigate, click elements, type text, run multi-step scripts in one call, and monitor console/network activity in real time
 ---
 
 # Chrome Tab Control
@@ -194,6 +194,62 @@ scripts/tab-control-cli.mjs waitfor <tab> "window.done === true" --timeout 120 -
 
 `--timeout` is in seconds (default 60), `--interval` in milliseconds (default 250).
 It exits non-zero on timeout, so it is safe to chain with `&&`.
+
+### Run a script (many steps in one call)
+
+When a task takes more than two or three steps, or repeats a step (fill a form,
+page through results, collect rows), write it as one script instead of one
+command per step. A script attaches once, runs every step, and prints only what
+you `return` or `console.log` — so you pay for one tool call and one result, not
+a dozen screenshots and reports.
+
+```bash
+scripts/tab-control-cli.mjs run <tab> <<'JS'
+await tab.fill('input[name=q]', 'chrome extensions');
+await tab.key('Enter');
+await tab.waitfor(() => document.querySelectorAll('.result').length > 0);
+return await tab.eval(() =>
+  [...document.querySelectorAll('.result a')].slice(0, 5).map((a) => ({ text: a.textContent.trim(), href: a.href })));
+JS
+```
+
+`run <tab> [file|-] [--timeout <sec>]` reads the script from a file, or from stdin
+(the default). It is the body of an async function: use `await` and `return`
+freely. A returned string prints as-is, anything else as JSON. The whole script is
+stopped after `--timeout` seconds (default 300).
+
+In scope: `tab` and `sleep(ms)`. Methods on `tab` mirror the commands above, with
+the same checks, and return the same reports unless noted:
+
+| Method | Notes |
+|---|---|
+| `tab.eval(expr \| fn, ...args)` | **Returns the value.** A function runs *in the page*: it cannot see script variables, so pass them as `args` (JSON-encoded). |
+| `tab.waitfor(expr \| fn, { timeout, interval, args })` | `timeout` in seconds (60), `interval` in ms (250) |
+| `tab.info()` | **Returns** `{ url, title }`, current after navigation |
+| `tab.cdp(method, params)` | **Returns** the raw CDP result |
+| `tab.click(sel, { real, exact })`, `tab.clickxy(x, y)` | |
+| `tab.fill(sel, text)`, `tab.focus(sel)`, `tab.type(text)`, `tab.key(spec, count)` | |
+| `tab.nav(url, { crossOrigin })`, `tab.refresh({ hard })`, `tab.front()` | `nav` stays same-host unless `crossOrigin: true` (needs the user's consent, as for the command) |
+| `tab.snap()`, `tab.html(sel)`, `tab.shot(file, { highlight })` | |
+| `tab.annotations()`, `tab.pins()`, `tab.loadall(sel, ms)` | |
+
+Console/network monitors (`console`, `requests`, `watch`) are not available in
+scripts; run them as separate commands.
+
+Guidelines:
+
+- **Explore first, then script.** Use `snap`, `shot` or `pins` to learn the page,
+  then script the steps you are sure of. Do not script blind against a page you have
+  not looked at.
+- **Check inside the script.** Follow an action with a `waitfor` or `eval` that
+  proves it worked, and `throw` if not — a failing script stops at that line.
+- **Return a little, not the page.** Filter and shape data in the page function
+  (`tab.eval(() => ...)`) and return just what you need.
+- Errors name the script line, e.g. `Element not found: #save (script line 4)`,
+  and exit non-zero. Steps before the failing line have already happened, so check
+  the page state before re-running a script that is not safe to repeat.
+- A script is plain Node.js running as you, like any shell command; it reaches only
+  the tab whose handle it was given.
 
 ## Coordinates
 

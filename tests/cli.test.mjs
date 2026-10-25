@@ -15,7 +15,7 @@ import { mkdtempSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 
 const CLI = resolve(dirname(fileURLToPath(import.meta.url)), '../skills/chrome-tab-control/scripts/tab-control-cli.mjs');
-const { parseKeySpec, parseRepeat, parseWaitForArgs } = await import(pathToFileURL(CLI).href);
+const { parseKeySpec, parseRepeat, parseWaitForArgs, parseRunArgs, toPageExpression } = await import(pathToFileURL(CLI).href);
 
 // --- parseKeySpec -----------------------------------------------------------
 
@@ -119,6 +119,40 @@ test('parseWaitForArgs rejects non-positive and non-numeric flag values', () => 
 test('parseWaitForArgs returns an empty expression when only flags are given', () => {
   assert.equal(parseWaitForArgs(['--timeout', '5']).expression, '');
   assert.equal(parseWaitForArgs([]).expression, '');
+});
+
+// --- parseRunArgs ------------------------------------------------------------
+
+test('parseRunArgs reads stdin with a five-minute timeout by default', () => {
+  assert.deepEqual(parseRunArgs([]), { file: '-', timeoutMs: 300000 });
+});
+
+test('parseRunArgs takes the script file and --timeout in seconds, in any order', () => {
+  assert.deepEqual(parseRunArgs(['s.js', '--timeout', '30']), { file: 's.js', timeoutMs: 30000 });
+  assert.deepEqual(parseRunArgs(['--timeout', '1.5', 's.js']), { file: 's.js', timeoutMs: 1500 });
+});
+
+test('parseRunArgs rejects a bad timeout and more than one script', () => {
+  assert.throws(() => parseRunArgs(['--timeout', '0']), /positive number of seconds/);
+  assert.throws(() => parseRunArgs(['--timeout']), /positive number of seconds/);
+  assert.throws(() => parseRunArgs(['a.js', 'b.js']), /one script file/);
+});
+
+// --- toPageExpression --------------------------------------------------------
+
+test('toPageExpression passes an expression string through unchanged', () => {
+  assert.equal(toPageExpression('document.title'), 'document.title');
+});
+
+test('toPageExpression calls a function with its args JSON-encoded, keeping undefined', () => {
+  const expr = toPageExpression((a, b, c) => [a, b, c], ['x"y', { n: 1 }, undefined]);
+  assert.deepEqual(eval(expr), ['x"y', { n: 1 }, undefined]);
+});
+
+test('toPageExpression rejects args with a string, and an empty or non-code value', () => {
+  assert.throws(() => toPageExpression('x', [1]), /only be passed with a function/);
+  assert.throws(() => toPageExpression(''), /expression string or a function/);
+  assert.throws(() => toPageExpression(42), /expression string or a function/);
 });
 
 test('the CLI runs when invoked through a symlinked path', () => {

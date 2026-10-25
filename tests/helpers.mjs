@@ -185,3 +185,14 @@ export const runCli = (home, args, env = {}, timeoutMs = 0) => promisify(execFil
   env: { ...process.env, HOME: home, ...env },
   timeout: timeoutMs,
 }).then((r) => ({ code: 0, ...r }), (e) => ({ code: e.code, stdout: e.stdout, stderr: e.stderr }));
+
+// Like runCli, but writes `input` to the CLI's stdin and closes it.
+export function runCliWithStdin(home, args, input) {
+  const proc = spawn(process.execPath, [CLI, ...args], { env: { ...process.env, HOME: home } });
+  let stdout = '';
+  let stderr = '';
+  proc.stdout.on('data', (chunk) => { stdout += chunk; });
+  proc.stderr.on('data', (chunk) => { stderr += chunk; });
+  proc.stdin.end(input);
+  return once(proc, 'close').then(([code]) => ({ code, stdout, stderr }));
+}

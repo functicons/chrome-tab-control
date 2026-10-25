@@ -12,6 +12,7 @@ A Chrome extension + CLI + AI skill that lets you selectively share browser tabs
 - 📸 **Screenshots** — capture viewport with coordinate mapping
 - 🌳 **Accessibility tree** — structured page snapshot for AI understanding
 - ⌨️ **Interaction** — click elements, type text, navigate pages
+- 📜 **Scripts** — run many steps against a tab in one call (`run`), returning only the result the agent needs
 - 🔍 **Console monitoring** — capture `console.log`, errors, warnings in real time, with history buffer
 - 🌐 **Network monitoring** — watch requests/responses with POST bodies
 - 🧭 **Navigate + watch** — monitor console and network during page load in a single command
@@ -345,6 +346,15 @@ tc remote devbox [--name <label>]
 
 # Send raw CDP command
 tc evalraw <tab> "DOM.getDocument" "{}"
+
+# Run many steps in one call: a JS script with `tab` (the commands above) and `sleep`
+tc run <tab> script.js [--timeout 300]
+tc run <tab> <<'JS'
+await tab.fill('input[name=q]', 'hello');
+await tab.key('Enter');
+await tab.waitfor(() => document.querySelector('.results'));
+return await tab.eval(() => document.querySelectorAll('.result').length);
+JS
 ```
 
 ## ⚠️ Foreground-only: user activation

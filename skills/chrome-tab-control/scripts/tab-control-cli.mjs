@@ -8,7 +8,8 @@
 //   a tab, is the only way to reach one. Run with --help for commands.
 
 import net from 'net';
-import { writeFileSync, readdirSync, realpathSync } from 'fs';
+import vm from 'vm';
+import { writeFileSync, readFileSync, readdirSync, realpathSync } from 'fs';
 import { resolve, basename } from 'path';
 import { fileURLToPath } from 'url';
 import {
@@ -336,7 +337,7 @@ async function annotationsStr(cdp) {
   return result.value;
 }
 
-async function evalStr(cdp, expression) {
+async function evalValue(cdp, expression) {
   await cdp.send('Runtime.enable');
   const result = await cdp.send('Runtime.evaluate', {
     expression, returnByValue: true, awaitPromise: true,
@@ -344,8 +345,15 @@ async function evalStr(cdp, expression) {
   if (result.exceptionDetails) {
     throw new Error(result.exceptionDetails.exception?.description || result.exceptionDetails.text);
   }
-  const val = result.result.value;
+  return result.result.value;
+}
+
+function formatValue(val) {
   return typeof val === 'object' ? JSON.stringify(val, null, 2) : String(val ?? '');
+}
+
+async function evalStr(cdp, expression) {
+  return formatValue(await evalValue(cdp, expression));
 }
 
 async function shotStr(cdp, filePath, highlightSelector) {
@@ -427,18 +435,22 @@ function hostnameOf(url) {
   try { return new URL(url).hostname; } catch { return null; }
 }
 
+const CLI_NAV_OVERRIDE = { crossOrigin: '--cross-origin', refresh: '"refresh"' };
+const SCRIPT_NAV_OVERRIDE = { crossOrigin: '{ crossOrigin: true }', refresh: 'tab.refresh()' };
+
 // Permission check: nav must stay on the same hostname unless --cross-origin.
 // A tab on about:blank or chrome://* has no real origin to protect, so any nav is allowed.
-async function assertSameHostNav(cdp, targetUrl) {
+// `override` names the opt-out in the caller's terms (CLI flag or script option).
+async function assertSameHostNav(cdp, targetUrl, override = CLI_NAV_OVERRIDE) {
   const currentUrl = await evalStr(cdp, 'location.href');
   const currentHost = hostnameOf(currentUrl);
   if (!currentHost || /^(about:|chrome:|chrome-extension:|edge:)/i.test(currentUrl)) return;
   const targetHost = hostnameOf(targetUrl);
   if (!targetHost) {
-    throw new Error(`Refusing nav: target URL has no hostname (${targetUrl}). Pass --cross-origin to override.`);
+    throw new Error(`Refusing nav: target URL has no hostname (${targetUrl}). Pass ${override.crossOrigin} to override.`);
   }
   if (currentHost !== targetHost) {
-    throw new Error(`Refusing cross-host nav: ${currentHost} → ${targetHost}. Pass --cross-origin to override, or use "refresh" to reload the current URL.`);
+    throw new Error(`Refusing cross-host nav: ${currentHost} → ${targetHost}. Pass ${override.crossOrigin} to override, or use ${override.refresh} to reload the current URL.`);
   }
 }
 
@@ -1198,6 +1210,134 @@ async function evalRawStr(cdp, method, paramsJson) {
 }
 
 // ---------------------------------------------------------------------------
+// Scripts: many steps against one tab in a single call
+// ---------------------------------------------------------------------------
+
+const RUN_TIMEOUT_DEFAULT_MS = 5 * 60 * 1000;
+// Script errors are reported as "<SCRIPT_FILENAME>:<line>", matching the script's own lines.
+const SCRIPT_FILENAME = 'tab-script';
+const STDIN_ARG = '-';
+// The stack at the script line that called a tab method. Errors raised inside
+// the CDP socket (timeouts, a revoked tab) carry no script frame of their own.
+const SCRIPT_CALL_SITE = Symbol('scriptCallSite');
+
+// Wraps a tab method so its errors remember the script line that called it.
+const traced = (method) => async (...args) => {
+  const callSite = new Error().stack;
+  try {
+    return await method(...args);
+  } catch (e) {
+    if (e instanceof Error && !e[SCRIPT_CALL_SITE]) e[SCRIPT_CALL_SITE] = callSite;
+    throw e;
+  }
+};
+
+const mapValues = (obj, fn) => Object.fromEntries(Object.entries(obj).map(([k, v]) => [k, fn(v)]));
+
+export function parseRunArgs(args) {
+  let timeoutMs = RUN_TIMEOUT_DEFAULT_MS;
+  const rest = [];
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === '--timeout') {
+      const sec = parseFloat(args[i + 1]);
+      if (!isFinite(sec) || sec <= 0) throw new Error('--timeout requires a positive number of seconds');
+      timeoutMs = Math.round(sec * 1000);
+      i++;
+    } else {
+      rest.push(args[i]);
+    }
+  }
+  if (rest.length > 1) throw new Error(`run takes one script file (or ${STDIN_ARG} for stdin), got: ${rest.join(' ')}`);
+  return { file: rest[0] ?? STDIN_ARG, timeoutMs };
+}
+
+// A page-side expression from either a JS string or a function. A function is
+// serialized and called in the page with JSON-encoded args, so it cannot close
+// over script variables — pass them as args instead.
+export function toPageExpression(expr, args = []) {
+  if (typeof expr === 'function') {
+    const encoded = args.map((a) => (a === undefined ? 'undefined' : JSON.stringify(a)));
+    return `(${expr.toString()})(${encoded.join(', ')})`;
+  }
+  if (typeof expr !== 'string' || !expr) throw new Error('expected a JS expression string or a function');
+  if (args.length) throw new Error('args can only be passed with a function, not an expression string');
+  return expr;
+}
+
+// The `tab` object a script receives. Methods mirror the CLI commands, with the
+// same checks (e.g. same-host nav), and return the same reports, except eval,
+// info and cdp, which return values.
+function makeTabApi(cdp) {
+  return Object.freeze(mapValues({
+    info: () => evalValue(cdp, '({ url: location.href, title: document.title })'),
+    eval: (expr, ...args) => evalValue(cdp, toPageExpression(expr, args)),
+    cdp: (method, params = {}) => cdp.send(method, params),
+    snap: () => snapshotStr(cdp),
+    html: (selector) => htmlStr(cdp, selector),
+    shot: (file, { highlight } = {}) => shotStr(cdp, file ?? null, highlight ?? null),
+    nav: async (url, { crossOrigin = false } = {}) => {
+      if (!crossOrigin) await assertSameHostNav(cdp, url, SCRIPT_NAV_OVERRIDE);
+      return navStr(cdp, url);
+    },
+    refresh: ({ hard = false } = {}) => refreshStr(cdp, hard),
+    click: (selector, { real = false, exact = false } = {}) => clickStr(cdp, selector, { real, exact }),
+    clickxy: (x, y) => clickXyStr(cdp, x, y),
+    type: (text) => typeStr(cdp, text),
+    key: (spec, count = 1) => keyStr(cdp, spec, count),
+    focus: (selector) => focusStr(cdp, selector),
+    fill: (selector, text) => fillStr(cdp, selector, text),
+    front: () => bringToFrontStr(cdp),
+    waitfor: (expr, { timeout = 60, interval = 250, args = [] } = {}) =>
+      waitForStr(cdp, toPageExpression(expr, args), { timeoutMs: timeout * 1000, intervalMs: interval }),
+    loadall: (selector, intervalMs = 1500) => loadAllStr(cdp, selector, intervalMs),
+    annotations: () => annotationsStr(cdp),
+    pins: () => picksStr(cdp),
+  }, traced));
+}
+
+// The script is the body of an async function of (tab, sleep), so top-level
+// await and `return` work. Line numbers in errors match the script's lines.
+function compileScript(source) {
+  const wrapped = `(async function (tab, sleep) {\n${source}\n})`;
+  return new vm.Script(wrapped, { filename: SCRIPT_FILENAME, lineOffset: -1 }).runInThisContext();
+}
+
+// Names the script line an error came from; the message alone often cannot.
+function withScriptLine(error) {
+  const stacks = `${error?.[SCRIPT_CALL_SITE] ?? ''}\n${error?.stack ?? ''}`;
+  const line = stacks.match(new RegExp(`${SCRIPT_FILENAME}:(\\d+)`))?.[1];
+  const message = error?.name === 'SyntaxError' ? `SyntaxError: ${error.message}` : String(error?.message ?? error);
+  return new Error(line ? `${message} (script line ${line})` : message);
+}
+
+function readScript(file) {
+  if (file === STDIN_ARG && process.stdin.isTTY) {
+    throw new Error('script required: pass a script file, or pipe it on stdin (e.g. a heredoc)');
+  }
+  const source = readFileSync(file === STDIN_ARG ? 0 : file, 'utf8');
+  if (!source.trim()) throw new Error(`script is empty (${file === STDIN_ARG ? 'nothing on stdin' : file})`);
+  return source;
+}
+
+async function runStr(cdp, source, timeoutMs) {
+  let script;
+  try { script = compileScript(source); } catch (e) { throw withScriptLine(e); }
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(
+      `Script did not finish within ${timeoutMs / 1000}s (raise it with --timeout <sec>)`,
+    )), timeoutMs);
+  });
+  try {
+    return formatValue(await Promise.race([script(makeTabApi(cdp), sleep), timeout]));
+  } catch (e) {
+    throw withScriptLine(e);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Tab resolution
 // ---------------------------------------------------------------------------
 
@@ -1288,6 +1428,8 @@ Usage: tab-control <command> [args]
   evalraw <tab> <method> [json]     Raw CDP command
   annotations <tab>                 List user-drawn annotations with page context
   pins <tab>                        List user-pinned elements (from Select)
+  run <tab> [file|-] [--timeout <sec>]  Run a JS script of many steps in one call
+                                    (stdin by default; see SKILL.md "Run a script")
 
   remote <ssh-dest> [--name <label>]  Run where Chrome is: link this Chrome to a remote
                                     host, so an agent there can reach tabs you share
@@ -1313,7 +1455,7 @@ const NEEDS_TAB = new Set([
   'refresh', 'reload',
   'net', 'network', 'console', 'requests', 'watch',
   'click', 'clickxy', 'type', 'loadall', 'evalraw', 'annotations', 'pins',
-  'key', 'waitfor', 'focus', 'fill', 'front',
+  'key', 'waitfor', 'focus', 'fill', 'front', 'run',
 ]);
 
 async function main() {
@@ -1468,6 +1610,11 @@ async function main() {
         if (!cmdArgs[0]) { console.error('Error: CDP method required'); process.exit(1); }
         const jsonParams = cmdArgs.length > 2 ? cmdArgs.slice(1).join(' ') : cmdArgs[1];
         result = await evalRawStr(cdp, cmdArgs[0], jsonParams);
+        break;
+      }
+      case 'run': {
+        const { file, timeoutMs } = parseRunArgs(cmdArgs);
+        result = await runStr(cdp, readScript(file), timeoutMs);
         break;
       }
       default:
