@@ -88,6 +88,22 @@ test('stopping a link stops it and removes it, even while it is still starting',
   assert.deepEqual(links.snapshot(), []);
 });
 
+test('a link shows as unlinking until it has finished stopping', async () => {
+  let finishStop;
+  const startLink = async (opts) => ({
+    stop: () => { opts.onState(LinkState.UNLINKING, 'Unlinking'); return new Promise((r) => { finishStop = r; }); },
+  });
+  const links = createLinkManager({ startLink });
+  links.start(DEST);
+  await settle();
+  const stopped = links.stop(DEST);
+  await settle();
+  assert.equal(links.snapshot()[0].state, LinkState.UNLINKING);
+  finishStop();
+  await stopped;
+  assert.deepEqual(links.snapshot(), []);
+});
+
 test('stopAll stops every link', async () => {
   const { started, startLink } = fakeStarter();
   const links = createLinkManager({ startLink });

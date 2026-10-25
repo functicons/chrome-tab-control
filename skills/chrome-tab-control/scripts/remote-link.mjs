@@ -29,7 +29,9 @@ const MAX_REQUEST_LINE_BYTES = 64 * 1024;
 const CLIENT_ATTACH_TIMEOUT_MS = 10_000;
 const PROXY_REPLY_TIMEOUT_MS = 5_000;
 const PREP_TIMEOUT_MS = 30_000;
-const CLEANUP_TIMEOUT_MS = 5_000;
+// Generous: some hosts take seconds just to connect (e.g. through a jump host
+// or an IAP tunnel), and a cut-short cleanup leaves the socket behind.
+const CLEANUP_TIMEOUT_MS = 20_000;
 // ssh -N gives no "forward is up" signal; ExitOnForwardFailure makes it exit
 // fast when the forward fails, so surviving this long means it is up.
 const LINK_SETTLE_MS = 3_000;
@@ -319,6 +321,8 @@ export const LinkState = Object.freeze({
   CONNECTING: 'connecting',
   LINKED: 'linked',
   RETRYING: 'retrying',
+  // Forward closed; removing the socket on the remote host.
+  UNLINKING: 'unlinking',
   STOPPED: 'stopped',
 });
 
@@ -379,6 +383,7 @@ export async function startRemoteLink({
   async function stop() {
     if (stopping) return;
     stopping = true;
+    onState(LinkState.UNLINKING, `Unlinking from ${dest}`);
     clearTimeout(retryTimer);
     wake();
     child?.kill('SIGTERM');

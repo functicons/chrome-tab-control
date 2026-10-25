@@ -267,13 +267,15 @@ async function retryUntilOk(run, timeoutMs = 5000) {
 
 // Starts a proxy (the Chrome machine) and `tab-control remote` linking it to a
 // fake remote host, waits for the forwarded socket, runs fn, then unlinks.
-async function withRemoteLink(tabs, fn) {
+async function withRemoteLink(tabs, fn, extraEnv = {}) {
   const local = makeHome();
   const remote = makeHome();
   const pidFile = `${local}/ssh-pids`;
   let ext = await startProxy(local);
   const link = spawn(process.execPath, [CLI, 'remote', DEST, '--name', LINK_NAME], {
-    env: { ...process.env, HOME: local, TAB_CONTROL_SSH: FAKE_SSH, FAKE_REMOTE_HOME: remote, FAKE_SSH_PIDS: pidFile },
+    env: {
+      ...process.env, HOME: local, TAB_CONTROL_SSH: FAKE_SSH, FAKE_REMOTE_HOME: remote, FAKE_SSH_PIDS: pidFile, ...extraEnv,
+    },
     stdio: ['ignore', 'ignore', 'pipe'],
   });
   let linkLog = '';
@@ -379,6 +381,21 @@ test('Ctrl-C while waiting to retry exits at once', async () => {
   } finally {
     rmSync(home, { recursive: true, force: true });
   }
+});
+
+// Longer than the cleanup used to allow (5s), as seen through an IAP jump host.
+const SLOW_CLEANUP_MS = 7000;
+
+test('unlinking waits for a slow host to remove the forwarded socket', async () => {
+  await withRemoteLink([], async ({ remote, unlink }) => {
+    const deadline = SLOW_CLEANUP_MS + 8000;
+    const [code] = await Promise.race([
+      unlink(),
+      new Promise((_, rej) => setTimeout(() => rej(new Error('unlink did not finish')), deadline)),
+    ]);
+    assert.equal(code, 0);
+    assert.equal(existsSync(remoteSockPath(remote)), false);
+  }, { FAKE_SSH_SLOW: "^sh -c '\\[ -S", FAKE_SSH_SLOW_MS: String(SLOW_CLEANUP_MS) });
 });
 
 test('unlinking removes the forwarded and bridge sockets', async () => {

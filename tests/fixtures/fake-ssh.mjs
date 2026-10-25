@@ -9,6 +9,8 @@
 //                                       like sshd it does not unlink <remote> on exit
 //
 // Each -N session appends its pid to $FAKE_SSH_PIDS so a test can drop the link.
+// A command matching the regex $FAKE_SSH_SLOW waits $FAKE_SSH_SLOW_MS first, like
+// a host behind a slow jump host.
 
 import net from 'node:net';
 import { spawnSync } from 'node:child_process';
@@ -18,7 +20,11 @@ const args = process.argv.slice(2);
 const remoteHome = process.env.FAKE_REMOTE_HOME;
 
 if (!args.includes('-N')) {
-  const r = spawnSync('sh', ['-c', args[args.length - 1]], {
+  const command = args[args.length - 1];
+  if (process.env.FAKE_SSH_SLOW && new RegExp(process.env.FAKE_SSH_SLOW).test(command)) {
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, Number(process.env.FAKE_SSH_SLOW_MS));
+  }
+  const r = spawnSync('sh', ['-c', command], {
     env: { ...process.env, HOME: remoteHome }, stdio: 'inherit',
   });
   process.exit(r.status ?? 1);

@@ -44,6 +44,9 @@ class CdpSocket {
   // or (for a client on a remote host) its remote access was turned off.
   get revoked() { return this.#revoked; }
 
+  // Why the session ended, for every command it cut off, not only monitors.
+  endReason() { return this.#revoked ? DISCONNECTED_REVOKED : DISCONNECTED_LOST; }
+
   connect(socketPath) {
     return new Promise((resolve, reject) => {
       this.#conn = net.connect(socketPath);
@@ -54,7 +57,7 @@ class CdpSocket {
         this.#isClosed = true;
         this.#markClosed();
         for (const { reject } of this.#pending.values()) {
-          reject(new Error('Connection closed'));
+          reject(new Error(this.endReason()));
         }
         this.#pending.clear();
       });
@@ -90,7 +93,7 @@ class CdpSocket {
   }
 
   send(method, params = {}, timeout = TIMEOUT) {
-    if (this.#isClosed) return Promise.reject(new Error('Connection closed'));
+    if (this.#isClosed) return Promise.reject(new Error(this.endReason()));
     const id = ++this.#idCounter;
     return new Promise((resolve, reject) => {
       this.#pending.set(id, { resolve, reject });
@@ -150,9 +153,7 @@ const DISCONNECTED_LOST = 'Lost the connection to the tab (Chrome, the tab proxy
 // Waits out a monitoring window, but fails at once if the session ends, so a
 // monitor never keeps reporting "0 events" from a tab it can no longer see.
 async function monitorFor(cdp, ms) {
-  const ended = cdp.closed.then(() => {
-    throw new Error(cdp.revoked ? DISCONNECTED_REVOKED : DISCONNECTED_LOST);
-  });
+  const ended = cdp.closed.then(() => { throw new Error(cdp.endReason()); });
   await Promise.race([sleep(ms), ended]);
 }
 

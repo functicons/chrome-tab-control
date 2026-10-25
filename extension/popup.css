@@ -232,7 +232,7 @@ h1 {
 }
 
 .link-state.linked { background: #e6f4ea; color: #137333; }
-.link-state.connecting { background: #e8f0fe; color: #1a73e8; }
+.link-state.connecting, .link-state.unlinking { background: #e8f0fe; color: #1a73e8; }
 .link-state.retrying, .link-state.error { background: #fce8e6; color: #c5221f; }
 
 .link-detail { font-size: 11px; color: #777; margin-top: 2px; word-break: break-word; }

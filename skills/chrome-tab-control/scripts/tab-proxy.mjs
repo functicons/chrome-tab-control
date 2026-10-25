@@ -32,7 +32,9 @@ import { createLinkManager } from './link-manager.mjs';
 
 const CDP_TIMEOUT = 15000;
 // How long shutdown waits for links to unlink (and remove their remote sockets).
-const SHUTDOWN_GRACE_MS = 4000;
+// Bounded, because Chrome is quitting. A socket left behind refuses
+// connections, and the next link from this profile to that host removes it.
+const SHUTDOWN_GRACE_MS = 10_000;
 const SOCKET_PATH = proxySocketPath(process.pid);
 
 // State
