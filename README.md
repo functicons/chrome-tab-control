@@ -242,21 +242,22 @@ Claude Code will use the handle with the CLI to interact with the tab. If you fo
 
 ### 🌐 Use from a remote host (SSH / remote sessions)
 
-When your agent runs on another machine (over `ssh`, or a remote terminal session) but Chrome runs on your laptop, link the two. On the laptop, run:
+When your agent runs on another machine (over `ssh`, or a remote terminal session) but Chrome runs on your laptop, link the two:
 
-```bash
-tc remote devbox           # any ssh destination: host, user@host, or a ~/.ssh/config alias
-```
+1. In the extension popup, under **Remote hosts**, type the ssh destination (a host, `user@host`, or a `~/.ssh/config` alias) and click **Link**. The row turns **linked** within a few seconds.
+2. Share the tab as usual. Sharing copies its handle.
+3. Tick **Remote** next to the handle. It is off by default, so a shared tab stays local-only until you choose otherwise.
+4. Paste the handle into the remote session. Your terminal is local, so the clipboard works as usual.
 
-Leave it running; Ctrl-C unlinks. Then, for each tab you want the remote agent to reach:
+The remote agent uses the handle exactly as it would locally (`tc info <tab>`). Each host's row in the popup shows its state (`connecting`, `linked`, `retrying` with the reason) and its latest attaches and refusals, so you can see what reached your tabs. **Unlink** cuts the host off. Hosts you linked before stay listed as **not linked**, for one click to relink. Nothing links on its own, not even when Chrome starts.
 
-1. Share the tab as usual. Sharing copies its handle.
-2. Tick **Remote** next to the handle in the extension popup. It is off by default, so a shared tab stays local-only until you choose otherwise.
-3. Paste the handle into the remote session. Your terminal is local, so the clipboard works as usual.
+A host can reach your tabs only while it is linked, a tab only with **Remote** ticked, and only with that tab's handle. Ticking **Remote** opens a tab to every linked host, but only a host whose agent has the handle can attach to it.
 
-The remote agent uses the handle exactly as it would locally (`tc info <tab>`). The link's terminal prints every remote attach (and refusal), so you can see what reached your tabs.
+Links from the popup are **per Chrome profile**. Each profile runs its own copy of the extension and its own tab proxy, so a link started in one profile's popup reaches only that profile's tabs and is listed only in that popup. To use tabs from two profiles on the same host, link it from both. Links from the popup run inside the tab proxy, so they end when Chrome quits.
 
-**How it works:** `tc remote` keeps an `ssh -R` session open that forwards `~/.chrome-tab-control/sock/remote-<laptop>.sock` on the remote host to a local bridge. The bridge marks each attach as remote and hands it to the local tab proxy, which admits it only for tabs with **Remote** ticked. Turning **Remote** off disconnects remote agents from that tab at once and keeps local ones. If the SSH connection drops, the link reconnects with backoff. Restarting Chrome does not break it.
+To link from a terminal instead, run `tc remote devbox` on the Chrome machine. A terminal link reaches the tabs of **every** profile (still only those with **Remote** ticked, and only by handle). It prints each attach and refusal, and Ctrl-C unlinks. Terminal links are not listed in any popup.
+
+**How it works:** a link keeps an `ssh -R` session open that forwards `~/.chrome-tab-control/sock/remote-<laptop>.sock` on the remote host to a local bridge. The bridge marks each attach as remote and hands it to the local tab proxy, which admits it only for tabs with **Remote** ticked. Turning **Remote** off disconnects remote agents from that tab at once and keeps local ones. If the SSH connection drops, the link reconnects with backoff. Restarting Chrome does not break it.
 
 **Requirements:**
 - Key-based SSH from the laptop to the remote host. The link runs ssh with `BatchMode=yes`, so it cannot answer password prompts.
@@ -402,6 +403,7 @@ chrome-tab-control/
 │   ├── cli.test.mjs
 │   ├── proxy.test.mjs                  # Proxy access control (spawns the real proxy)
 │   ├── remote.test.mjs                 # Remote link: bridge, ssh supervisor (fake ssh)
+│   ├── links.test.mjs                  # Links managed from the popup, via the proxy
 │   ├── helpers.mjs                     # Shared harness: fake extension, socket client
 │   └── fixtures/fake-ssh.mjs           # ssh stand-in with a local "remote host"
 └── skills/chrome-tab-control/          # Skill directory (what AI agents use)
@@ -409,7 +411,8 @@ chrome-tab-control/
     └── scripts/
         ├── tab-control-cli.mjs         # CLI tool (all commands)
         ├── tab-proxy.mjs             # Tab proxy (native messaging bridge)
-        ├── remote-link.mjs           # `remote` command: bridge + ssh -R supervisor
+        ├── remote-link.mjs           # Remote link: bridge + ssh -R supervisor (`remote` command)
+        ├── link-manager.mjs          # Links the tab proxy runs for the popup
         ├── protocol.mjs              # Paths and auth constants shared by CLI and proxy
         └── tab-proxy-wrapper.sh      # Node.js path resolver for nvm/volta/fnm
 ```

@@ -41,12 +41,12 @@ export async function until(pred, what) {
 // Fake extension: spawns a proxy, speaks native messaging to it, answers every
 // cdp_command, and records everything the proxy sends.
 export class FakeExtension {
-  constructor(home) {
+  constructor(home, env = {}) {
     this.home = home;
     this.received = [];
     this.stderr = '';
     this.proc = spawn(process.execPath, [PROXY], {
-      env: { ...process.env, HOME: home },
+      env: { ...process.env, HOME: home, ...env },
       stdio: ['pipe', 'pipe', 'pipe'],
     });
     this.proc.stderr.on('data', (chunk) => { this.stderr += chunk; });
@@ -160,8 +160,8 @@ export class Client {
 // /tmp keeps socket paths under the ~104-byte macOS sun_path limit.
 export const makeHome = () => mkdtempSync('/tmp/tc-test-');
 
-export async function startProxy(home) {
-  const ext = new FakeExtension(home);
+export async function startProxy(home, env = {}) {
+  const ext = new FakeExtension(home, env);
   await until(() => ext.stderr.includes('Tab proxy started') || ext.proc.exitCode !== null, 'proxy start');
   await until(() => { try { statSync(ext.socketPath); return true; } catch { return false; } }, 'proxy socket');
   return ext;

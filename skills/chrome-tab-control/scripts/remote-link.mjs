@@ -284,31 +284,50 @@ async function prepareRemote(sshCommand, dest, socketName, onChild) {
   return remotePath;
 }
 
-// Runs one ssh -R session; resolves with how long it stayed up, when it exits
-// or stop() is called.
-function forwardOnce(sshCommand, args, { log, onChild, describe }) {
+// Runs one ssh -R session; resolves with how long it stayed up and the last
+// line ssh printed to stderr (its reason for failing), when it exits or stop()
+// is called. stdout is never inherited: in the tab proxy it is the native
+// messaging channel to Chrome.
+function forwardOnce(sshCommand, args, { onChild, onUp }) {
   return new Promise((res) => {
     const started = Date.now();
-    const child = spawn(sshCommand, args, { stdio: ['ignore', 'ignore', 'inherit'] });
+    const child = spawn(sshCommand, args, { stdio: ['ignore', 'ignore', 'pipe'] });
     onChild(child);
-    const settle = setTimeout(() => log(describe), LINK_SETTLE_MS);
+    let lastError = '';
+    child.stderr.on('data', (chunk) => {
+      process.stderr.write(chunk);
+      const lines = chunk.toString().trim().split('\n').filter(Boolean);
+      if (lines.length) lastError = lines.at(-1);
+    });
+    const settle = setTimeout(onUp, LINK_SETTLE_MS);
     let done = false;
     const finish = (code, signal) => {
       if (done) return;
       done = true;
       clearTimeout(settle);
       onChild(null);
-      res({ upMs: Date.now() - started, code, signal });
+      res({ upMs: Date.now() - started, code, signal, lastError });
     };
     child.once('exit', finish);
     // A spawn failure may emit only 'error', never 'exit'.
-    child.once('error', (e) => { log(`ssh failed to start: ${e.message}`); finish(null, null); });
+    child.once('error', (e) => { lastError = `ssh failed to start: ${e.message}`; finish(null, null); });
   });
 }
 
-// Links this machine's shared tabs to dest until stopped. Returns {stop}.
+// Link states reported through onState(state, message).
+export const LinkState = Object.freeze({
+  CONNECTING: 'connecting',
+  LINKED: 'linked',
+  RETRYING: 'retrying',
+  STOPPED: 'stopped',
+});
+
+// Links this machine's shared tabs to dest until stopped. log receives the
+// audit trail (attaches, refusals) and progress lines; onState receives state
+// changes. listSockets limits which local proxies the link reaches (default:
+// all of them, i.e. every Chrome profile). Returns {stop}.
 export async function startRemoteLink({
-  dest, socketName, sshCommand = 'ssh', log = defaultLog,
+  dest, socketName, sshCommand = 'ssh', log = defaultLog, onState = () => {}, listSockets,
 }) {
   ensurePrivateDir(configDir());
   ensurePrivateDir(sockDir());
@@ -316,7 +335,7 @@ export async function startRemoteLink({
   if (await canConnect(bridgePath)) {
     throw new Error(`a link to ${dest} (${socketName}) is already running; stop it first, or pass a different --name`);
   }
-  const bridge = createBridge({ label: dest, log });
+  const bridge = createBridge({ label: dest, log, ...(listSockets && { listSockets }) });
   await listenPrivate(bridge, bridgePath);
 
   let stopping = false;
@@ -328,24 +347,31 @@ export async function startRemoteLink({
   const loop = (async () => {
     let delay = 0;
     while (!stopping) {
+      let reason;
       try {
+        onState(LinkState.CONNECTING, `Connecting to ${dest}`);
         remotePath = await prepareRemote(sshCommand, dest, socketName, (c) => { child = c; });
         if (stopping) break;
-        const { upMs, code, signal } = await forwardOnce(sshCommand,
+        const { upMs, code, signal, lastError } = await forwardOnce(sshCommand,
           buildForwardArgs(dest, remotePath, bridgePath), {
-            log,
             onChild: (c) => { child = c; },
-            describe: `Linked to ${dest}. Tabs you share with "Remote" on are reachable there by tab handle. Ctrl-C to unlink.`,
+            onUp: () => {
+              const msg = `Linked to ${dest}. Tabs with "Remote" on are reachable there by tab handle.`;
+              log(msg);
+              onState(LinkState.LINKED, msg);
+            },
           });
         if (stopping) break;
         if (upMs >= STABLE_LINK_MS) delay = 0;
-        log(`Link to ${dest} closed (${signal ?? `exit ${code}`})`);
+        reason = `Link to ${dest} closed (${lastError || signal || `exit ${code}`})`;
       } catch (e) {
-        log(`Cannot link to ${dest}: ${e.message}`);
+        reason = `Cannot link to ${dest}: ${e.message}`;
       }
       if (stopping) break;
       delay = nextRetryDelay(delay);
+      log(reason);
       log(`Retrying in ${Math.round(delay / 1000)}s`);
+      onState(LinkState.RETRYING, `${reason}. Retrying in ${Math.round(delay / 1000)}s`);
       await new Promise((r) => { wake = r; retryTimer = setTimeout(r, delay); });
     }
   })();
@@ -365,6 +391,7 @@ export async function startRemoteLink({
         CLEANUP_TIMEOUT_MS).catch(() => {});
     }
     log(`Unlinked from ${dest}`);
+    onState(LinkState.STOPPED, `Unlinked from ${dest}`);
   }
 
   return { stop, bridgePath };
@@ -382,7 +409,7 @@ export async function remoteCommand(args, { sshCommand = process.env.TAB_CONTROL
     process.stderr.write(`Error: ${parsed.error}\nUsage: tab-control remote <ssh-dest> [--name <label>]\n`);
     return 1;
   }
-  defaultLog(`Linking to ${parsed.dest} ...`);
+  defaultLog(`Linking to ${parsed.dest} ... (Ctrl-C to unlink)`);
   let link;
   try {
     link = await startRemoteLink({ dest: parsed.dest, socketName: parsed.socketName, sshCommand });

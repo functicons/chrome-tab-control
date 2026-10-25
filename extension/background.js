@@ -10,6 +10,63 @@ const sharedTabs = new Map(); // tabId -> {url, title, handle, remote}
 const annotatingTabs = new Set(); // tabId
 
 // ---------------------------------------------------------------------------
+// Remote links — run by the tab proxy, started and stopped from the popup.
+// The proxy reports their state (links_status); hosts the user linked before
+// are remembered for one-click relinking, but never linked automatically.
+// ---------------------------------------------------------------------------
+
+const REMEMBERED_HOSTS_KEY = 'rememberedHosts';
+// Random id per Chrome profile (each profile has its own extension storage).
+// It names this profile's socket on the remote host, so two profiles can link
+// the same host without colliding.
+const PROFILE_ID_KEY = 'profileId';
+const PROFILE_ID_LENGTH = 6;
+const REMEMBERED_HOSTS_MAX = 8;
+let remoteLinks = []; // [{dest, state, message, activity}] from the proxy
+
+async function rememberedHosts() {
+  try {
+    return (await chrome.storage.local.get(REMEMBERED_HOSTS_KEY))[REMEMBERED_HOSTS_KEY] || [];
+  } catch {
+    return [];
+  }
+}
+
+async function setRememberedHosts(hosts) {
+  await chrome.storage.local.set({ [REMEMBERED_HOSTS_KEY]: hosts.slice(0, REMEMBERED_HOSTS_MAX) });
+}
+
+// Same rule as the proxy's validateSshDest: '-...' would be an ssh option.
+// Checked here too so a bad entry is never remembered.
+const isSshDest = (dest) => Boolean(dest) && !dest.startsWith('-') && !/\s/.test(dest);
+
+async function profileId() {
+  const stored = (await chrome.storage.local.get(PROFILE_ID_KEY))[PROFILE_ID_KEY];
+  if (stored) return stored;
+  const id = generateTabHandle().replace(/-/g, '').slice(0, PROFILE_ID_LENGTH).toLowerCase();
+  await chrome.storage.local.set({ [PROFILE_ID_KEY]: id });
+  return id;
+}
+
+async function startLink(dest) {
+  if (!isSshDest(dest)) throw new Error(`"${dest}" is not an ssh destination (e.g. devbox or user@host)`);
+  ensureNativePort().postMessage({ type: 'link_start', dest, profile: await profileId() });
+  const hosts = await rememberedHosts();
+  await setRememberedHosts([dest, ...hosts.filter((h) => h !== dest)]);
+  broadcastState();
+}
+
+function stopLink(dest) {
+  if (nativePort) nativePort.postMessage({ type: 'link_stop', dest });
+}
+
+async function forgetHost(dest) {
+  stopLink(dest);
+  await setRememberedHosts((await rememberedHosts()).filter((h) => h !== dest));
+  broadcastState();
+}
+
+// ---------------------------------------------------------------------------
 // Tab handles — the secret, random id an agent uses to reach a shared tab.
 // Shared tabs are never listed, so the handle is the only way in.
 // ---------------------------------------------------------------------------
@@ -157,6 +214,9 @@ function ensureNativePort() {
   nativePort.onMessage.addListener((msg) => {
     if (msg.type === 'cdp_command') {
       handleCdpCommand(msg);
+    } else if (msg.type === 'links_status') {
+      remoteLinks = msg.links || [];
+      broadcastState();
     }
   });
 
@@ -164,6 +224,9 @@ function ensureNativePort() {
     const err = chrome.runtime.lastError;
     if (err) console.warn('Native host disconnected:', err.message);
     nativePort = null;
+    // Links run inside the proxy, so they ended with it.
+    remoteLinks = [];
+    broadcastState();
   });
 
   // Re-send shared tabs and their handles so a restarted proxy can route to them
@@ -605,7 +668,7 @@ function broadcastState() {
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg.type === 'get_state') {
-    chrome.tabs.query({}).then((tabs) => {
+    Promise.all([chrome.tabs.query({}), rememberedHosts()]).then(([tabs, hosts]) => {
       const tabList = tabs
         .filter((t) => t.url && !t.url.startsWith('chrome://') && !t.url.startsWith('chrome-extension://'))
         .map((t) => ({
@@ -617,7 +680,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           remote: sharedTabs.get(t.id)?.remote === true,
           annotating: annotatingTabs.has(t.id),
         }));
-      sendResponse({ tabs: tabList });
+      sendResponse({ tabs: tabList, links: remoteLinks, rememberedHosts: hosts });
     });
     return true; // async
   }
@@ -631,6 +694,16 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 
   if (msg.type === 'unshare') {
     unshareTab(msg.tabId)
+      .then(() => sendResponse({ ok: true }))
+      .catch((e) => sendResponse({ ok: false, error: e.message }));
+    return true;
+  }
+
+  if (msg.type === 'link_start' || msg.type === 'link_stop' || msg.type === 'forget_host') {
+    const dest = String(msg.dest || '').trim();
+    const action = { link_start: startLink, link_stop: stopLink, forget_host: forgetHost }[msg.type];
+    Promise.resolve()
+      .then(() => action(dest))
       .then(() => sendResponse({ ok: true }))
       .catch((e) => sendResponse({ ok: false, error: e.message }));
     return true;

@@ -10,6 +10,14 @@
     <span class="status" id="status"></span>
     <button class="screenshot-btn" id="screenshotBtn" title="Screenshot visible tab (Cmd+Shift+S)">📷</button>
   </div>
+  <div class="links">
+    <div class="links-title" title="Hosts whose agents can reach this profile's tabs with Remote on (by tab handle)">Remote hosts</div>
+    <div id="links"></div>
+    <form id="linkForm" class="link-form">
+      <input id="linkHost" type="text" placeholder="ssh host, e.g. devbox or user@host" autocomplete="off" spellcheck="false">
+      <button type="submit" class="link-btn">Link</button>
+    </form>
+  </div>
   <div id="tabs"></div>
   <div class="footer">
     <span class="footer-label">Extension ID:</span>

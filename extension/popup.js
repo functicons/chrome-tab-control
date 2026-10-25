@@ -1,4 +1,9 @@
 const tabsDiv = document.getElementById('tabs');
+const linksDiv = document.getElementById('links');
+const linkForm = document.getElementById('linkForm');
+const linkHostInput = document.getElementById('linkHost');
+// Recent attaches/refusals shown per link (the proxy keeps a few more).
+const LINK_ACTIVITY_SHOWN = 3;
 const statusEl = document.getElementById('status');
 const COPIED_FEEDBACK_MS = 2000;
 
@@ -67,6 +72,55 @@ function render(tabs, activeTabId) {
     .join('');
 }
 
+// Active links first (from the proxy), then remembered hosts not linked now.
+function renderLinks(links, remembered) {
+  const active = new Set(links.map((l) => l.dest));
+  const idle = remembered.filter((h) => !active.has(h));
+  linksDiv.innerHTML = [
+    ...links.map((l) => `
+    <div class="link-row">
+      <div class="link-main">
+        <span class="link-dest">${escapeHtml(l.dest)}</span>
+        <span class="link-state ${escapeHtml(l.state)}">${escapeHtml(l.state)}</span>
+        <button class="unlink-btn" data-dest="${escapeHtml(l.dest)}">${l.state === 'error' ? 'Dismiss' : 'Unlink'}</button>
+      </div>
+      ${l.state === 'linked' ? '' : `<div class="link-detail">${escapeHtml(l.message || '')}</div>`}
+      ${(l.activity || []).slice(-LINK_ACTIVITY_SHOWN).map((a) => `<div class="link-activity">${escapeHtml(a)}</div>`).join('')}
+    </div>`),
+    ...idle.map((h) => `
+    <div class="link-row">
+      <div class="link-main">
+        <span class="link-dest">${escapeHtml(h)}</span>
+        <span class="link-state">not linked</span>
+        <button class="link-btn" data-dest="${escapeHtml(h)}">Link</button>
+        <button class="forget-btn" data-dest="${escapeHtml(h)}" title="Forget this host">×</button>
+      </div>
+    </div>`),
+  ].join('') || '<div class="link-detail">No remote hosts linked for this Chrome profile.</div>';
+}
+
+async function sendLinkAction(type, dest) {
+  const resp = await chrome.runtime.sendMessage({ type, dest });
+  if (!resp?.ok) alert('Error: ' + (resp?.error || 'unknown'));
+  loadTabs();
+}
+
+linksDiv.addEventListener('click', (e) => {
+  const btn = e.target.closest('button[data-dest]');
+  if (!btn) return;
+  const type = btn.classList.contains('unlink-btn') ? 'link_stop'
+    : btn.classList.contains('forget-btn') ? 'forget_host' : 'link_start';
+  sendLinkAction(type, btn.dataset.dest);
+});
+
+linkForm.addEventListener('submit', (e) => {
+  e.preventDefault();
+  const dest = linkHostInput.value.trim();
+  if (!dest) return;
+  linkHostInput.value = '';
+  sendLinkAction('link_start', dest);
+});
+
 function copyTabHandle(el) {
   navigator.clipboard.writeText(el.dataset.handle)
     .then(() => markCopied(parseInt(el.dataset.tabId, 10)));
@@ -119,6 +173,7 @@ async function loadTabs() {
   ]);
   if (!resp?.tabs) return;
   render(resp.tabs, activeTab?.id);
+  renderLinks(resp.links || [], resp.rememberedHosts || []);
 }
 
 // Listen for state changes from background

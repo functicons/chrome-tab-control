@@ -309,6 +309,14 @@ test('a CLI on the remote host reaches a tab whose remote access is on', async (
   });
 });
 
+test('with a link up, an unknown handle is not blamed on a missing link', async () => {
+  await withRemoteLink([{ ...TAB, remote: true }], async ({ remoteCli }) => {
+    const r = await remoteCli(['info', 'AAAA-BBBB-CCCC']);
+    assert.match(r.stderr, /No shared tab has the handle/);
+    assert.doesNotMatch(r.stderr, /No remote link is up/);
+  });
+});
+
 test('a CLI on the remote host is told to ask for remote access when it is off', async () => {
   await withRemoteLink([TAB], async ({ remoteCli, ext }) => {
     const r = await remoteCli(['eval', TAB.handle, '1+1']);

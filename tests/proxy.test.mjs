@@ -289,6 +289,7 @@ test('CLI rejects an unknown handle without touching any tab', async () => {
     const r = await runCli(home, ['eval', 'AAAA-BBBB-CCCC', '1+1']);
     assert.equal(r.code, 1);
     assert.match(r.stderr, /No shared tab has the handle/);
+    assert.match(r.stderr, /No remote link is up on this host/);
     assert.equal(ext.cdpCommands().length, 0);
   });
 });

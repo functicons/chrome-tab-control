@@ -9,7 +9,7 @@
 
 import net from 'net';
 import { writeFileSync, readdirSync, realpathSync } from 'fs';
-import { resolve } from 'path';
+import { resolve, basename } from 'path';
 import { fileURLToPath } from 'url';
 import {
   sockDir, PROXY_SOCKET_RE, REMOTE_SOCKET_RE, ATTACH_METHOD, AttachError,
@@ -1216,18 +1216,21 @@ function tabEndpoints() {
     .map((n) => resolve(sockDir(), n));
 }
 
-const NOT_RUNNING = 'Tab Control is not running. Ask the user to open Chrome with the Tab Control extension and share the tab.'
-  + ' If Chrome runs on another machine, the user links it to this host by running `tab-control remote <this-host>` there.';
+const LINK_HINT = 'If Chrome runs on another machine, the user links it to this host there: Tab Control popup > Remote hosts > Link'
+  + ' (or `tab-control remote <this-host>`).';
+const NOT_RUNNING = `Tab Control is not running. Ask the user to open Chrome with the Tab Control extension and share the tab. ${LINK_HINT}`;
 
 // Tries the handle against every endpoint. The one reaching the tab accepts
 // it; the others reject it and close. Returns {cdp, tab: {tabId, url, title}}.
 async function attachToTab(handle) {
   let reachable = 0;
+  let remoteReachable = false;
   let remoteDisabled = false;
   for (const path of tabEndpoints()) {
     const cdp = new CdpSocket();
     try { await cdp.connect(path); } catch { continue; }
     reachable++;
+    if (REMOTE_SOCKET_RE.test(basename(path))) remoteReachable = true;
     try {
       return { cdp, tab: await cdp.send(ATTACH_METHOD, { handle }) };
     } catch (e) {
@@ -1239,7 +1242,10 @@ async function attachToTab(handle) {
     throw new Error(`Remote access is off for tab "${handle}". Ask the user to turn on "Remote" for that tab in the Tab Control popup.`);
   }
   if (reachable === 0) throw new Error(NOT_RUNNING);
-  throw new Error(`No shared tab has the handle "${handle}" (it may have been unshared). ${HANDLE_HINT}`);
+  // This host may run its own Chrome, whose proxy answered; the tab may be on
+  // a Chrome elsewhere that is not linked here.
+  const linkHint = remoteReachable ? '' : ` No remote link is up on this host either. ${LINK_HINT}`;
+  throw new Error(`No shared tab has the handle "${handle}" (it may have been unshared). ${HANDLE_HINT}${linkHint}`);
 }
 
 // ---------------------------------------------------------------------------

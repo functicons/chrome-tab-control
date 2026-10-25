@@ -15,6 +15,10 @@
 // and is disconnected when the user turns that off. The host forwards commands
 // to the extension, which executes them via chrome.debugger.sendCommand(). The
 // socket directory is private (0700).
+//
+// The proxy also runs the remote links the user starts from the popup
+// (link_start / link_stop; status goes back as links_status). They stop when
+// the proxy exits, i.e. when Chrome quits.
 
 import net from 'net';
 import { createHash, timingSafeEqual } from 'crypto';
@@ -24,8 +28,11 @@ import {
   configDir, sockDir, proxySocketPath, PROXY_SOCKET_RE, ensurePrivateDir,
   PRIVATE_SOCKET_MODE, ATTACH_METHOD, AttachError, normalizeTabHandle, isRequestObject,
 } from './protocol.mjs';
+import { createLinkManager } from './link-manager.mjs';
 
 const CDP_TIMEOUT = 15000;
+// How long shutdown waits for links to unlink (and remove their remote sockets).
+const SHUTDOWN_GRACE_MS = 4000;
 const SOCKET_PATH = proxySocketPath(process.pid);
 
 // State
@@ -63,9 +70,11 @@ process.stdin.on('data', (chunk) => {
   }
 });
 
-process.stdin.on('end', () => { cleanup(); process.exit(0); });
-process.on('SIGTERM', () => { cleanup(); process.exit(0); });
-process.on('SIGINT', () => { cleanup(); process.exit(0); });
+process.stdin.on('end', shutdown);
+// Chrome may close the pipe first; a failed write must not crash the shutdown.
+process.stdout.on('error', () => {});
+process.on('SIGTERM', shutdown);
+process.on('SIGINT', shutdown);
 
 function log(msg) {
   process.stderr.write(`[tab-proxy] ${msg}\n`);
@@ -153,6 +162,8 @@ function handleExtensionMessage(msg) {
     case 'cdp_response': onCdpResponse(msg); break;
     case 'cdp_error':    onCdpError(msg); break;
     case 'cdp_event':    onCdpEvent(msg); break;
+    case 'link_start':   links.start(String(msg.dest ?? ''), String(msg.profile ?? '')); break;
+    case 'link_stop':    links.stop(String(msg.dest ?? '')); break;
     default:             log(`Unknown message type: ${msg.type}`);
   }
 }
@@ -316,6 +327,31 @@ try { unlinkSync(SOCKET_PATH); } catch {}
 server.listen(SOCKET_PATH, () => {
   try { chmodSync(SOCKET_PATH, PRIVATE_SOCKET_MODE); } catch {}
 });
+
+// ---------------------------------------------------------------------------
+// Remote links (managed from the popup)
+// ---------------------------------------------------------------------------
+
+function sendLinksStatus() {
+  if (!shuttingDown) sendToExtension({ type: 'links_status', links: links.snapshot() });
+}
+
+// A link started from this profile's popup reaches this profile's tabs only.
+const links = createLinkManager({
+  sshCommand: process.env.TAB_CONTROL_SSH || 'ssh',
+  onChange: sendLinksStatus,
+  listSockets: () => [SOCKET_PATH],
+});
+
+let shuttingDown = false;
+async function shutdown() {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  const grace = new Promise((r) => setTimeout(r, SHUTDOWN_GRACE_MS).unref());
+  await Promise.race([links.stopAll(), grace]);
+  cleanup();
+  process.exit(0);
+}
 
 function cleanup() {
   for (const conn of clients.keys()) { try { conn.end(); } catch {} }

@@ -203,6 +203,64 @@ h1 {
 
 .annotate-btn:disabled { opacity: 0.5; cursor: default; }
 
+.links {
+  padding: 8px 14px 10px;
+  border-bottom: 1px solid #eee;
+  background: #fafafa;
+}
+
+.links-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: #5f6368;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  margin-bottom: 6px;
+}
+
+.link-row { padding: 4px 0; }
+.link-main { display: flex; align-items: center; gap: 6px; }
+.link-dest { font-family: 'SF Mono', Monaco, Consolas, monospace; font-size: 12px; font-weight: 600; flex: 1; }
+
+.link-state {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 8px;
+  background: #e8e8e8;
+  color: #5f6368;
+}
+
+.link-state.linked { background: #e6f4ea; color: #137333; }
+.link-state.connecting { background: #e8f0fe; color: #1a73e8; }
+.link-state.retrying, .link-state.error { background: #fce8e6; color: #c5221f; }
+
+.link-detail { font-size: 11px; color: #777; margin-top: 2px; word-break: break-word; }
+.link-activity { font-family: 'SF Mono', Monaco, Consolas, monospace; font-size: 10px; color: #888; margin-top: 2px; }
+
+.link-btn, .unlink-btn, .forget-btn {
+  padding: 2px 8px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  background: #fff;
+  cursor: pointer;
+  font-size: 11px;
+}
+
+.link-btn:hover, .unlink-btn:hover { background: #f0f0f0; }
+.forget-btn { border: none; background: none; color: #999; font-size: 13px; padding: 0 4px; }
+.forget-btn:hover { color: #c5221f; }
+
+.link-form { display: flex; gap: 6px; margin-top: 6px; }
+.link-form input {
+  flex: 1;
+  padding: 3px 6px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  font-size: 12px;
+  font-family: 'SF Mono', Monaco, Consolas, monospace;
+}
+
 .empty {
   color: #999;
   text-align: center;

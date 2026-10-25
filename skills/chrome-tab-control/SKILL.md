@@ -26,7 +26,7 @@ Shared tabs are **never listed**: there is no way to discover them. The tab hand
 
 You may run on a remote host (over SSH) while the user's Chrome is on their laptop. The CLI works the same once the user links the two:
 
-- If a command says *"Tab Control is not running"* and you are on a remote host, ask the user to run `tab-control remote <this-host>` **on the machine where Chrome runs** (the skill's `scripts/tab-control-cli.mjs remote <ssh-destination>`), and to leave it running.
+- If a command says *"Tab Control is not running"* and you are on a remote host, ask the user to link this host **on the machine where Chrome runs**: in the Tab Control popup, under **Remote hosts**, enter this host's ssh name and click **Link**. (Or run `tab-control remote <this-host>` there and leave it running.)
 - If a command says *"Remote access is off for tab …"*, ask the user to tick **Remote** for that tab in the Tab Control popup. Do not retry in a loop.
 - Do not try to set up the link yourself: it runs on the user's machine and its SSH connection is theirs to make.
 - If a command stops with *"Disconnected from the tab"*, the user unshared the tab or turned its remote access off. Treat that as their decision: ask before trying again.
